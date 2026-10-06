@@ -1,0 +1,13 @@
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+venv/
+
+# Data files are never committed
+data/
+
+# macOS junk
+.DS_Store
+
+# Secrets
+.env

@@ -15,4 +15,5 @@ tested billing logic, and an idempotent pipeline.
 
 ## Status
 
-Phase 1: project setup — in progress.
+Phase 1: project setup — done.
+Phase 2: versioned tariff database - in progress

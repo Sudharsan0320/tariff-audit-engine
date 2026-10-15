@@ -52,40 +52,44 @@ else:  # the version WAS already found...
 
 print(tariff_version_id)  # show the version id everything below will be stamped with
 
-for row in tables[0][1:]:  # loop over the table's data rows; tables[0] = first table, [1:] = rows from index 1 onward, skipping row 0 (the header)
-    schedule = row[0]  # the row's first cell: the schedule name, e.g. 'Schedule 5'
-    for component_type, rate_cell in (  # inner loop over two (label, cell) pairs; each round unpacks one pair into the two names
-        ("supply_cents_per_kwh", row[1]),  # pair 1: label for the energy charge; cell = column 1 (the kWh charge column)
-        ("demand_dollars_per_kw", row[4]),  # pair 2: label for the demand charge; cell = column 4 (the kW demand column)
-    ):
-        if rate_cell is None or not rate_cell.strip():  # if the cell is missing, or blank even after strip() removes surrounding whitespace...
-            continue  # ...skip to the next round of the loop (no component gets written for this cell)
+cur.execute(
+    """
+    SELECT COUNT(*) FROM tariff_components WHERE tariff_version_id = ?
+    """,
+    (tariff_version_id,),
+)
+component_count = cur.fetchone()[0]
 
-        # --- The pattern below tests the whole cell. Piece by piece: ---
-        # r = raw string: backslashes stay literal, which regex needs
-        # \$? = optional dollar sign; (\d+(?:\.\d+)?) = CAPTURED group 1 = the number (digits, optionally with decimals)
-        # (?:¢/kWh|/kW) = the unit suffix, grouped but NOT captured; (?:\d+(?:,\d+)*)? = optional footnote digits (like 1 or 3,4), ignored
-        # re.fullmatch(pattern, cell) = does the ENTIRE cell match? returns a match object, or None
-        match = re.fullmatch(
-            r"\$?(\d+(?:\.\d+)?)(?:¢/kWh|/kW)(?:\d+(?:,\d+)*)?",
-            rate_cell,
-        )
-        if match is None:  # the cell matched nothing recognizable...
-            raise ValueError(f"Unrecognized rate for {schedule}: {rate_cell}")  # ...crash loudly with a message (f-string fills in the names); never write a guessed rate into the database
+if component_count == 0:
+    for row in tables[0][1:]:  # loop over the table's data rows; tables[0] = first table, [1:] = rows from index 1 onward, skipping row 0 (the header)
+        schedule = row[0]  # the row's first cell: the schedule name, e.g. 'Schedule 5'
+        for component_type, rate_cell in (  # inner loop over two (label, cell) pairs; each round unpacks one pair into the two names
+            ("supply_cents_per_kwh", row[1]),  # pair 1: label for the energy charge; cell = column 1 (the kWh charge column)
+            ("demand_dollars_per_kw", row[4]),  # pair 2: label for the demand charge; cell = column 4 (the kW demand column)
+        ):
+            if rate_cell is None or not rate_cell.strip():  # if the cell is missing, or blank even after strip() removes surrounding whitespace...
+                continue  # ...skip to the next round of the loop (no component gets written for this cell)
 
-        # --- The SQL below writes one component row: ---
-        # INSERT INTO tariff_components(...) = add a row, naming four columns
-        # VALUES (?, ?, ?, ?) = four placeholders, filled in order from the tuple below it
-        # the values: the version id from above; the loop's label; the schedule name (stored in billing_category);
-        #   float(match.group(1)) = group(1) is the captured number text, float() converts it to a real number
-        cur.execute(
-            """
-            INSERT INTO tariff_components(
-                tariff_version_id, component_type, billing_category, rate
-            ) VALUES (?, ?, ?, ?)
-            """,
-            (tariff_version_id, component_type, schedule, float(match.group(1))),
-        )
+            # --- The pattern below tests the whole cell. Piece by piece: ---
+            # r = raw string: backslashes stay literal, which regex needs
+            # \$? = optional dollar sign; (\d+(?:\.\d+)?) = CAPTURED group 1 = the number (digits, optionally with decimals)
+            # (?:¢/kWh|/kW) = unit suffix; (?:\d+(?:,\d+)*)? = optional footnote digits, ignored
+            match = re.fullmatch(
+                r"\$?(\d+(?:\.\d+)?)(?:¢/kWh|/kW)(?:\d+(?:,\d+)*)?",
+                rate_cell,
+            )
+            if match is None:  # the cell matched nothing recognizable...
+                raise ValueError(f"Unrecognized rate for {schedule}: {rate_cell}")  # ...never write a guessed rate into the database
+
+            # --- The SQL below writes one component row: ---
+            cur.execute(
+                """
+                INSERT INTO tariff_components(
+                    tariff_version_id, component_type, billing_category, rate
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (tariff_version_id, component_type, schedule, float(match.group(1))),
+            )
 
 conn.commit()  # SAVE everything: one single commit for all rows = all-or-nothing, like activation
 conn.close()  # close the database connection

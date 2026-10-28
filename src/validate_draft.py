@@ -4,6 +4,19 @@ from pathlib import Path
 
 
 DATABASE_PATH = Path(__file__).resolve().parents[1] / "data" / "tariffs.db"
+VALID_UNITS = {
+    "usd_per_kwh",
+    "usd_per_kw",
+    "usd_per_rkva",
+    "usd_per_month",
+    "usd_per_unit_month",
+    "usd_per_luminaire",
+    "usd_per_service",
+    "usd_per_hour_unit",
+    "percent",
+    "multiplier",
+}
+NON_ORDINARY_TOKENS = ("credit", "adjustment", "payment")
 
 
 def validate_drafts(conn, version_id=None):
@@ -55,7 +68,7 @@ def validate_drafts(conn, version_id=None):
         components = conn.execute(
             f"""
             SELECT id, tariff_version_id, component_type, billing_category, rate,
-                   tier_min_kwh, tier_max_kwh, season
+                   formula, unit, tier_min, tier_max, tier_unit, season, variant
             FROM tariff_components
             WHERE tariff_version_id IN ({placeholders})
             ORDER BY id
@@ -70,18 +83,54 @@ def validate_drafts(conn, version_id=None):
                 component_type,
                 billing_category,
                 rate,
-                tier_min_kwh,
-                tier_max_kwh,
+                formula,
+                unit,
+                tier_min,
+                tier_max,
+                tier_unit,
                 season,
+                variant,
             ) = component
-            if (
-                not isinstance(rate, (int, float))
-                or not math.isfinite(rate)
-                or rate <= 0
+
+            rate_present = rate is not None
+            formula_present = isinstance(formula, str) and bool(formula.strip())
+            if rate_present == formula_present:
+                failures.append(
+                    f"Component {component_id} must have exactly one of rate or "
+                    f"formula."
+                )
+
+            if rate_present:
+                if (
+                    not isinstance(rate, (int, float))
+                    or isinstance(rate, bool)
+                    or not math.isfinite(rate)
+                ):
+                    failures.append(
+                        f"Component {component_id} has an invalid rate: {rate!r}."
+                    )
+                elif rate <= 0 and not (
+                    isinstance(component_type, str)
+                    and any(
+                        token in component_type.lower()
+                        for token in NON_ORDINARY_TOKENS
+                    )
+                ):
+                    failures.append(
+                        f"Component {component_id} has a non-positive rate: "
+                        f"{rate!r}."
+                    )
+
+            if unit not in VALID_UNITS:
+                failures.append(
+                    f"Component {component_id} has an invalid unit: {unit!r}."
+                )
+
+            if tier_min is not None and (
+                not isinstance(tier_unit, str) or not tier_unit.strip()
             ):
                 failures.append(
-                    f"Component {component_id} has a non-positive or invalid rate: "
-                    f"{rate!r}."
+                    f"Component {component_id} has tier_min but no tier_unit."
                 )
 
             key = (
@@ -89,9 +138,12 @@ def validate_drafts(conn, version_id=None):
                 component_type,
                 billing_category,
                 rate,
-                tier_min_kwh,
-                tier_max_kwh,
+                formula,
+                unit,
+                tier_min,
+                tier_max,
                 season,
+                variant,
             )
             if key in seen_components:
                 failures.append(

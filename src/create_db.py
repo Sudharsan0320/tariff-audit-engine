@@ -40,10 +40,24 @@ CREATE TABLE IF NOT EXISTS tariff_components (
     tariff_version_id INTEGER NOT NULL,
     component_type TEXT NOT NULL,
     billing_category TEXT,
-    rate REAL NOT NULL,
-    tier_min_kwh REAL,
-    tier_max_kwh REAL,
+    rate REAL,
+    formula TEXT,
+    unit TEXT,
+    tier_min REAL,
+    tier_max REAL,
+    tier_unit TEXT,
     season TEXT,
+    variant TEXT,
+    FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id)
+);
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS tariff_rules (
+    id INTEGER PRIMARY KEY,
+    tariff_version_id INTEGER NOT NULL,
+    rule_type TEXT NOT NULL,
+    rule_text TEXT NOT NULL,
     FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id)
 );
 """)

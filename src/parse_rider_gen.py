@@ -63,9 +63,9 @@ component_count = cur.fetchone()[0]
 if component_count == 0:
     for row in tables[0][1:]:  # loop over the table's data rows; tables[0] = first table, [1:] = rows from index 1 onward, skipping row 0 (the header)
         schedule = row[0]  # the row's first cell: the schedule name, e.g. 'Schedule 5'
-        for component_type, rate_cell in (  # inner loop over two (label, cell) pairs; each round unpacks one pair into the two names
-            ("supply_cents_per_kwh", row[1]),  # pair 1: label for the energy charge; cell = column 1 (the kWh charge column)
-            ("demand_dollars_per_kw", row[4]),  # pair 2: label for the demand charge; cell = column 4 (the kW demand column)
+        for component_type, rate_cell, unit, divisor in (
+            ("supply", row[1], "usd_per_kwh", 100),
+            ("demand", row[4], "usd_per_kw", 1),
         ):
             if rate_cell is None or not rate_cell.strip():  # if the cell is missing, or blank even after strip() removes surrounding whitespace...
                 continue  # ...skip to the next round of the loop (no component gets written for this cell)
@@ -85,10 +85,18 @@ if component_count == 0:
             cur.execute(
                 """
                 INSERT INTO tariff_components(
-                    tariff_version_id, component_type, billing_category, rate
-                ) VALUES (?, ?, ?, ?)
+                    tariff_version_id, component_type, billing_category, rate,
+                    formula, unit
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (tariff_version_id, component_type, schedule, float(match.group(1))),
+                (
+                    tariff_version_id,
+                    component_type,
+                    schedule,
+                    float(match.group(1)) / divisor,
+                    None,
+                    unit,
+                ),
             )
 
 conn.commit()  # SAVE everything: one single commit for all rows = all-or-nothing, like activation

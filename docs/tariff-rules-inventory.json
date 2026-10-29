@@ -1,0 +1,823 @@
+{
+  "title": "VEPGA Amendment 12 tariff rules inventory",
+  "effective_from": "2025-07-01",
+  "source": "User-provided RULES inventory (Pasted text #1.txt), supplemented only for deferred topics in the approved 3e plan using the cited Amendment 12 PDF pages.",
+  "inventory_rule_counts": {
+    "100": 4,
+    "102": 3,
+    "110": 3,
+    "120": 3,
+    "130": 9,
+    "131": 7,
+    "132": 9,
+    "134": 8,
+    "150": 3,
+    "151": 4,
+    "152": 1,
+    "153": 4,
+    "154": 2,
+    "A": 1,
+    "B": 1,
+    "C": 2,
+    "D": 4,
+    "E": 1,
+    "RG-CM": 1,
+    "SGCM": 4,
+    "SGCM-1": 2,
+    "SMH": 3,
+    "SP": 4,
+    "SSL": 3,
+    "RIDER CCR-CM": 0,
+    "RIDER RPS-CM": 0,
+    "RIDER PIPP-CM": 0,
+    "RIDER T-CM": 1,
+    "RIDER GEN-CM": 2,
+    "RIDER DIST-CM": 2,
+    "RIDER CE-CM": 1,
+    "RIDER OSW-CM": 1,
+    "RIDER SNA-CM": 1,
+    "RIDER E-CM": 1,
+    "RIDER RBB-CM": 1,
+    "RIDER SMR-CM": 1,
+    "RIDER G-CM": 2,
+    "RIDER K": 1,
+    "RIDER L": 1,
+    "RIDER A": 0
+  },
+  "supplement_rule_counts": {
+    "100": 0,
+    "102": 0,
+    "110": 1,
+    "120": 0,
+    "130": 0,
+    "131": 0,
+    "132": 1,
+    "134": 0,
+    "150": 0,
+    "151": 0,
+    "152": 0,
+    "153": 0,
+    "154": 0,
+    "A": 4,
+    "B": 1,
+    "C": 0,
+    "D": 3,
+    "E": 0,
+    "RG-CM": 0,
+    "SGCM": 0,
+    "SGCM-1": 0,
+    "SMH": 0,
+    "SP": 0,
+    "SSL": 1,
+    "RIDER CCR-CM": 0,
+    "RIDER RPS-CM": 0,
+    "RIDER PIPP-CM": 0,
+    "RIDER T-CM": 0,
+    "RIDER GEN-CM": 0,
+    "RIDER DIST-CM": 0,
+    "RIDER CE-CM": 0,
+    "RIDER OSW-CM": 0,
+    "RIDER SNA-CM": 0,
+    "RIDER E-CM": 0,
+    "RIDER RBB-CM": 0,
+    "RIDER SMR-CM": 0,
+    "RIDER G-CM": 0,
+    "RIDER K": 0,
+    "RIDER L": 0,
+    "RIDER A": 0
+  },
+  "expected_rule_counts": {
+    "100": 4,
+    "102": 3,
+    "110": 4,
+    "120": 3,
+    "130": 9,
+    "131": 7,
+    "132": 10,
+    "134": 8,
+    "150": 3,
+    "151": 4,
+    "152": 1,
+    "153": 4,
+    "154": 2,
+    "A": 5,
+    "B": 2,
+    "C": 2,
+    "D": 7,
+    "E": 1,
+    "RG-CM": 1,
+    "SGCM": 4,
+    "SGCM-1": 2,
+    "SMH": 3,
+    "SP": 4,
+    "SSL": 4,
+    "RIDER CCR-CM": 0,
+    "RIDER RPS-CM": 0,
+    "RIDER PIPP-CM": 0,
+    "RIDER T-CM": 1,
+    "RIDER GEN-CM": 2,
+    "RIDER DIST-CM": 2,
+    "RIDER CE-CM": 1,
+    "RIDER OSW-CM": 1,
+    "RIDER SNA-CM": 1,
+    "RIDER E-CM": 1,
+    "RIDER RBB-CM": 1,
+    "RIDER SMR-CM": 1,
+    "RIDER G-CM": 2,
+    "RIDER K": 1,
+    "RIDER L": 1,
+    "RIDER A": 0
+  },
+  "rules": [
+    {
+      "schedule_code": "100",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge is such as may be contracted for under Section VI of the Terms and Conditions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "100",
+      "rule_type": "billing_class_threshold",
+      "rule_text": "Non-Demand Billing applies when monthly kWh usage during the current and previous 11 billing months is 9,999 kWh or less, or where a demand meter is not present; Demand Billing applies at 10,000 kWh or more in any such month with a demand meter present.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "100",
+      "rule_type": "demand_determination",
+      "rule_text": "a kW demand meter is installed when the Customer has used 7,000 kWh or more in any billing month or estimated demand exceeds 25 kW; demand = highest average kW load measured in any 30-minute interval during the billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "100",
+      "rule_type": "unmetered_estimation",
+      "rule_text": "for unmetered service, kWh are estimated as connected load multiplied by hours usage.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "102",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge is such as may be contracted for under Section VI of the Terms and Conditions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "102",
+      "rule_type": "unmetered_estimation",
+      "rule_text": "for unmetered service, kWh are estimated as connected load multiplied by hours usage.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "102",
+      "rule_type": "metered_unmetered_charge_switch",
+      "rule_text": "effective Nov 1, 2014, a metered account with monthly kWh usage of 49 kWh or less in the current and previous 11 billing months is billed the Unmetered Basic Customer Charge; at 50 kWh or more, the Metered Basic Customer Charge.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "110",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge is such as may be contracted for under Section VI of the Terms and Conditions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "110",
+      "rule_type": "billing_class_threshold",
+      "rule_text": "Non-Demand applies at 9,999 kWh or less (current + previous 11 billing months) or no demand meter; Demand applies at 10,000 kWh or more with a demand meter present.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "110",
+      "rule_type": "demand_determination",
+      "rule_text": "demand meter installed at 7,000 kWh or more in any billing month or estimated demand greater than 25 kW; demand = highest average kW in any 30-minute interval during the billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "120",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge is such as may be contracted for under Section VI of the Terms and Conditions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "120",
+      "rule_type": "on_peak_hours",
+      "rule_text": "June 1–September 30: 10 a.m.–10 p.m., Mondays–Fridays; October 1–May 31: 7 a.m.–10 p.m., Mondays–Fridays.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "120",
+      "rule_type": "off_peak_hours",
+      "rule_text": "all other hours; all hours on New Year's Day, Memorial Day, Independence Day, Labor Day, Thanksgiving Day, and Christmas Day are off-peak.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge is as contracted under Section VI, or absent a contracted amount, the sum of the charges in ¶II.A, ¶II.B.1, and ¶II.B.2.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "es_demand_determination_lt_1_000_kw",
+      "rule_text": "kW billed under ¶II.B.1 = highest of (1) highest average kW in any 30-minute interval during the current billing month; (2) 90% of the highest average kW in any 30-minute interval during the billing months of June–September of the preceding eleven billing months (ratchet); (3) 50 kW (minimum demand).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "es_demand_determination_gte_1_000_kw",
+      "rule_text": "highest of (1) highest average kW in any 30-minute interval of the current month during on-peak hours (10 a.m.–10 p.m. Mon–Fri, June 1–Sept 30; 7 a.m.–10 p.m. Mon–Fri, Oct 1–May 31); (2) 90% of the highest such on-peak kW during June–September of the preceding eleven billing months; (3) 1,000 kW.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "es_adjustment_demand",
+      "rule_text": "kW billed under ¶II.B.2 = the Distribution Demand billed under ¶II.A.2.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "distribution_demand",
+      "rule_text": "billed only where service voltage is less than 69 kV; kW billed = contracted demand, but not less than the higher of (A) highest average kW in any 30-minute interval during the current and preceding eleven billing months, or (B) 50 kW.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "rkva_demand",
+      "rule_text": "billed only where ES Demand is determined under ¶III.B (≥1,000 kW); rkVA billed = highest average rkVA in any 30-minute interval during the current billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "proration",
+      "rule_text": "when days between meter readings ≠ 30, the Basic Customer Charge, Distribution Demand Charge, ES Demand Charge, ES Adjustment Demand Charge, rkVA Demand Charge, the kWh quantity in the first two blocks of the ES kWh Charge, and the minimum charge are each multiplied by actual days in the billing period and divided by 30.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "standby_contract_demand",
+      "rule_text": "if maximum measured kW demand, or 85% of any kVA demand measured, exceeds the contract demand, the contract demand is increased by such excess; where service voltage is less than 69 kV, demand billed under ¶II.A.2 is the contract demand.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "130",
+      "rule_type": "voltage_classes",
+      "rule_text": "Transmission Voltage = delivery voltage 69 kV or above; Primary Voltage = Distribution Demand ≥500 kW AND Company provides no transformation AND no Schedule SP discount; Secondary = all others.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "minimum_charge",
+      "rule_text": "as contracted under Section VI, or absent a contracted amount, the sum of ¶II.A, ¶II.B.1, and ¶II.B.2 charges.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "es_demand_determination",
+      "rule_text": "kW billed under ¶II.B.1 = highest of (A) highest average kW in any 30-minute interval of the current month during on-peak hours (10 a.m.–10 p.m. Mon–Fri, May 1–Oct 31; 6 a.m.–1 p.m. and 5–10 p.m. Mon–Fri, Nov 1–Apr 30); (B) 90% of the highest such kW during June–September of the preceding eleven billing months (ratchet); (C) 50 kW (minimum demand). Nov 1–Apr 30 off-peak exceedance clause: if off-peak (1–5 p.m. Mon–Fri) 30-minute demand exceeds on-peak demand by more than the installed thermal-storage capacity, the Company may include those hours.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "es_adjustment_demand",
+      "rule_text": "kW billed under ¶II.B.2 = the Distribution Demand billed under ¶II.A.2.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "distribution_demand",
+      "rule_text": "billed only when service voltage is less than 69 kV; kW billed = contracted, but not less than the higher of (A) highest average kW in any 30-minute interval during the current and preceding eleven billing months, or (B) 50 kW.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "rkva_demand",
+      "rule_text": "billed only when ES Demand is 1,000 kW or greater; rkVA billed = highest average rkVA in any 30-minute interval during the current billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "proration",
+      "rule_text": "charges (Basic Customer, Distribution Demand, rkVA, ES Demand, ES Adjustment Demand), the kWh quantity in the initial block of the ES Energy Charge, and the minimum charge are multiplied by actual billing days and divided by 30.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "131",
+      "rule_type": "standby_contract_demand_and_rule_voltage_classes",
+      "rule_text": "same structure as Schedule 130 (85% of kVA exceedance raises contract demand; Transmission ≥69 kV; Primary requires Distribution Demand ≥500 kW, no transformation, no SP discount).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "eligibility",
+      "rule_text": "peak measured average 30-minute demand must have reached/exceeded 500 kW in current or previous 11 consecutive billing months; service capped at 25 additional services per calendar year, 125 total services.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "minimum_charge",
+      "rule_text": "as contracted under Section VI, but not less than the sum of the charges in ¶III.A, ¶III.B.1, and ¶III.B.2.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "day_classification",
+      "rule_text": "classification for each day is determined by the Company and posted on its website after 5 p.m. the preceding day; if not determined by 5 p.m., classification defaults to \"C\". Classification A applies no more than 28 days per calendar year; Classification C no less than 60 days per calendar year.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "es_peak_demand",
+      "rule_text": "higher of (1) highest average kW demand measured during the current billing month, or (2) 85% of the highest average kVA demand measured during the current billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "es_contract_demand",
+      "rule_text": "the maximum demand the Company is to provide, but not less than 500 kW; if ES Peak Demand exceeds the Contract Demand, the Contract Demand is increased by the excess.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "es_adjustment_demand",
+      "rule_text": "kW billed under ¶III.B.2 = the Distribution Demand billed under ¶III.A.2.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "distribution_demand",
+      "rule_text": "billed only where service voltage is less than 69 kV; kW billed under ¶III.A.2 = the Electricity Supply Contract Demand.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "proration",
+      "rule_text": "Basic Customer Charge, Distribution Demand Charge, ES Contract Demand Charge, ES Adjustment Demand Charge, and the minimum charge are multiplied by actual billing days and divided by 30.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "voltage_classes",
+      "rule_text": "Transmission ≥69 kV; Primary requires Distribution Demand ≥500 kW, no Company transformation, no Schedule SP discount; Secondary = all others.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "eligibility",
+      "rule_text": "transmission or primary voltage only; peak measured average 30-minute demand ≥1,500 kW during at least three billing months within the previous 12 consecutive billing months.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge shall be as may be contracted for.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "on_peak_hours",
+      "rule_text": "June 1–September 30: 10 a.m. to 10 p.m.; October 1–May 31: 7 a.m. to 10 p.m. (days of week not specified in the extracted text); all other hours are off-peak.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "distribution_peak_demand",
+      "rule_text": "higher of (1) highest average kW demand measured during the current billing month, or (2) 85% of the highest average kVA demand measured during the current billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "distribution_contract_demand",
+      "rule_text": "maximum demand the Company is to provide, but not less than 1,500 kW; increased by any excess of Distribution Peak Demand over Contract Demand; billed only where service voltage is less than 69 kV.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "on_peak_es_demand",
+      "rule_text": "kW billed under ¶II.B.1 = highest of (A) highest average kW in any 30-minute interval of the current billing month during on-peak hours; (B) 90% of the highest such kW during June–September of the preceding 11 billing months (ratchet); (C) 1,000 kW.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "proration",
+      "rule_text": "Basic Customer Charge, Distribution Demand Charge, On-Peak Electricity Supply Demand Charge, and the minimum charge are multiplied by actual billing days and divided by 30.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "134",
+      "rule_type": "voltage_classes",
+      "rule_text": "Transmission = delivery voltage 69 kV or above; Primary = Distribution Contract Demand ≥1,500 kW AND no Company transformation (Customer may not purchase Company transformation facilities to qualify) AND no Schedule SP discount.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "150",
+      "rule_type": "minimum_charge",
+      "rule_text": "monthly minimum charge = the rate specified in ¶II.A.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "150",
+      "rule_type": "billed_kwh",
+      "rule_text": "Distribution and Electricity Supply kWh used = the \"Monthly kWh\" shown for each lamp; each kWh is subject to all applicable riders.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "150",
+      "rule_type": "outage_credit",
+      "rule_text": "if a reported light is not repaired within the applicable time limit (11 calendar days non-cable; 15 days cable repair; 45 days cable replacement), billing is automatically adjusted, with refund/credit prorated for days of outage following the first report.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "151",
+      "rule_type": "closed_schedule",
+      "rule_text": "applies only to installations in service as of January 1, 1986; no additional such units will be supplied.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "151",
+      "rule_type": "minimum_charge",
+      "rule_text": "monthly minimum charge = the rate specified in ¶II.A.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "151",
+      "rule_type": "billed_kwh",
+      "rule_text": "Distribution and Electricity Supply kWh used = the \"Monthly kWh\" shown for each lamp.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "151",
+      "rule_type": "outage_credit",
+      "rule_text": "same repair-time-limit / prorated outage-credit structure as Schedule 150, with an added exception for mercury vapor luminaire ballast/housing failure or unavailable lamps/photo-cells.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "152",
+      "rule_type": "cross_reference_charge",
+      "rule_text": "the Customer pays the monthly charges for roadway, directional and area lighting service as described in Schedule 150, including the additional charge for bridge poles stated in Schedule 150 II.A.5.a ($20.85 per unit per month). Other provisions are installation/service conditions (arm length, height, five-year payment term), not rates.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "153",
+      "rule_type": "excess_of_four_years_revenue_terf",
+      "rule_text": "Customer pays the Excess of Four Years' Revenue per Section XII of the Terms and Conditions, plus the applicable Tax Effect Recovery Factor (TERF) per Schedule C, for a standard lighting installation.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "153",
+      "rule_type": "applicable_schedule_charges",
+      "rule_text": "all charges under Schedule 150 or SSL, as applicable, for a standard installation of the same luminaire type and size, plus all applicable riders.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "153",
+      "rule_type": "facilities_charge",
+      "rule_text": "a facilities charge under Schedule B for the difference in cost between a standard and the special lighting installation.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "153",
+      "rule_type": "replacement_parts_cost_plus",
+      "rule_text": "Customer pays the Company's cost of purchasing special fixtures/poles/parts for replacement or repair = the greater of invoice cost plus 10% or invoice cost plus $50.00.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "154",
+      "rule_type": "minimum_charge",
+      "rule_text": "monthly minimum charge = the rate specified in ¶II.A.1 (the Basic Customer Charge).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "154",
+      "rule_type": "unmetered_estimation",
+      "rule_text": "for billing unmetered service, kWh are estimated based upon connected load multiplied by hours usage.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "A",
+      "rule_type": "advance_payment",
+      "rule_text": "advance payment is not required prior to connection.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "B",
+      "rule_type": "percentage_update",
+      "rule_text": "the percentages are updated to the same level and on the same date as the Virginia Jurisdictional percentages in Section IV of the Company's Virginia Jurisdictional Terms and Conditions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "C",
+      "rule_type": "standby_minimum_formula_part_a",
+      "rule_text": "Monthly charge for parallel/standby service (where not under Schedule 130/131) = (a) the greater of (1) contract demand per kW as determined @ $3.01 in Section XIII of the Agreement [garbled — verify], or (2) Monthly Minimum Charge per Electricity Supply kWh @ 2.803 cents, plus the amount determined below, but not less than zero; PLUS (b).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "C",
+      "rule_type": "standby_minimum_formula_part_b",
+      "rule_text": "(b) = (Total Distribution and Electricity Supply kWh Charge for the Billing Period under the Applicable Rate Schedule) - (Electricity Supply kWh for the Billing Period x Rate per kWh in para 4a.2) + (Electricity Supply kWh for the Billing Period x Fuel Charge Rider A).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "minimum_charge",
+      "rule_text": "in no case shall the Customer charge be less than zero.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "eligibility",
+      "rule_text": "replacement of a Non-functional Luminaire with a comparable Standard Basic/Premium LED (or SV, while inventory lasts) is at no charge to the Customer.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "cross_reference",
+      "rule_text": "TERF applies to conversion charges (¶III).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "definition",
+      "rule_text": "Attachment 1 to Schedule D is an HID→LED luminaire conversion chart (equipment/stock-number mapping only — no rates). Attachment 2 lists which luminaire types count as Non-Premium (Basic) vs Premium.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "E",
+      "rule_type": "rate_adjustment",
+      "rule_text": "the patrol rate is subject to adjustment for increased costs by the Company at the beginning of each succeeding year of the Agreement.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RG-CM",
+      "rule_type": "contract_settlement",
+      "rule_text": "a Net Schedule RG-CM Settlement charge or credit for each Renewable Facility, per the terms of the Customer's Schedule RG-CM Agreement, added to the monthly bill under the Principal Tariff.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SGCM",
+      "rule_type": "payment_basis",
+      "rule_text": "in months where operation is not requested, payment is based on the contracted CL; in other months, on Average Capacity Generated = total energy generated during Company-requested operation in the month ÷ hours of requested operation.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SGCM",
+      "rule_type": "cl_reduction_reimbursement",
+      "rule_text": "if Average Capacity Generated < contracted CL, the CL is reduced to the Average Capacity Generated; Summer CL reduced before Sept 30 (or Winter CL before Mar 31) triggers reimbursement of overpayments back to the most recent May (or November) billing month.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SGCM",
+      "rule_type": "operation_windows_limits",
+      "rule_text": "operation may be requested only May 16–Sept 30 (Summer; potential period 2 p.m.–9 p.m.) and Dec 1–Mar 31 (Winter; 6 a.m.–11 a.m. or 5 p.m.–10 p.m.); total requests limited to 19 (Summer) and 13 (Winter) per calendar year.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SGCM",
+      "rule_type": "eligibility",
+      "rule_text": "standby generation capacity of 100 kW or greater, not normally operated in parallel; connected to only one companion account; no PJM/Company demand-response participation.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SGCM-1",
+      "rule_type": "cross_reference",
+      "rule_text": "Same notification, CL-reduction/reimbursement, operation-window, and request-limit rules as Schedule SGCM.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SGCM-1",
+      "rule_type": "grandfathered_cap",
+      "rule_text": "Summer/Winter CL may not exceed the Customer's Summer/Winter Existing Capacity = the CL in effect under Schedule SGCM in the 1997 Summer season and the 1996/1997 Winter season, respectively.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SMH",
+      "rule_type": "minimum_charge",
+      "rule_text": "monthly minimum charge = the rate in ¶II.A plus all applicable riders.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SMH",
+      "rule_type": "billed_kwh",
+      "rule_text": "Distribution and Electricity Supply kWh used = the \"Monthly kWh\" shown in ¶II.A for each lamp.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SMH",
+      "rule_type": "outage_credit",
+      "rule_text": "same repair-time-limit / prorated outage-credit structure as Schedules 150/151.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SP",
+      "rule_type": "transformer_ownership_discount_flat_schedules",
+      "rule_text": "where the Customer owns the transformer(s) with service at primary distribution voltage and the service is billed on Schedules 100, 110, or 120, only the per-kWh charges of the rate schedule and all applicable riders are discounted by five percent (5%).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SP",
+      "rule_type": "transformer_ownership_discount_demand_schedules",
+      "rule_text": "same services billed on Schedules 130 and 131 — only the per-kWh charges of the rate schedule and all applicable riders are discounted by two percent (2%).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SP",
+      "rule_type": "customer_owned_street_lights",
+      "rule_text": "for metered service used solely to supply Customer-owned street lights, the rate is the appropriate pumping rate less a 1/2¢ reduction in the Electricity Supply Energy Off-peak kWh rate for each ES kWh metered off-peak (reduction does not apply to any rider rate).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SP",
+      "rule_type": "minimum_charge",
+      "rule_text": "minimum charge as contracted under Section VI; in no case less than the Basic Customer Charge in the appropriate rate schedule.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SSL",
+      "rule_type": "minimum_charge",
+      "rule_text": "monthly minimum charge = the rate specified in ¶II.A.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SSL",
+      "rule_type": "billed_kwh",
+      "rule_text": "Distribution and Electricity Supply kWh used = the \"Monthly kWh\" (Billed Monthly kWhs) shown for each lamp/tier.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "SSL",
+      "rule_type": "outage_credit",
+      "rule_text": "same repair-time-limit / prorated outage-credit structure as Schedules 150/151/SMH.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER T-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), kW of Electricity Supply Contract Demand (132), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER GEN-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER DIST-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), kW of Distribution Demand (132), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER CE-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER OSW-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER SNA-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER E-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER RBB-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), kW of Distribution Demand (132), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER SMR-CM",
+      "rule_type": "demand_basis",
+      "rule_text": "$/kW rows apply to kW of Electricity Supply Demand (130/131), On-peak Electricity Supply Demand kW (134).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER G-CM",
+      "rule_type": "contribution_options",
+      "rule_text": "Option 1: 100% of monthly consumption x Monthly Rate for RECs (MRR). Option 2: fixed dollar contribution per month, in multiples of $2.00 (RECs purchased = contribution / MRR).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER G-CM",
+      "rule_type": "rate_adjustment",
+      "rule_text": "the Company may change the MRR with two months' notice.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER K",
+      "rule_type": "credit_formula",
+      "rule_text": "Estimated Annual kWh = Connected Load of Qualifying Equipment (kW) x 8,760 hours x Estimated Annual Load Factor; Estimated Monthly kWh = Annual / 12; Total Monthly Credit = Estimated Monthly kWh x 0.7 cents per kWh (credit).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER L",
+      "rule_type": "credit_formula",
+      "rule_text": "same structure as Rider K, x 0.22 cents per kWh (credit).",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER GEN-CM",
+      "rule_type": "withdrawn_consolidation",
+      "rule_text": "Riders B-CM, BW-CM, GV-CM, US-2-CM, US-3-CM, US-4-CM were withdrawn effective 2025-07-01 and consolidated into GEN-CM; they have no v12 versions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "RIDER DIST-CM",
+      "rule_type": "withdrawn_consolidation",
+      "rule_text": "Riders GT-CM and U Phase 1/2-CM were withdrawn effective 2025-07-01 and consolidated into DIST-CM; GTP-CM and VCR-CM (negative credit riders) were eliminated; none have v12 versions.",
+      "origin": "inventory"
+    },
+    {
+      "schedule_code": "A",
+      "rule_type": "formula",
+      "rule_text": "Except as modified by Paragraphs B and C, the Temporary Service Charge is the estimated net cost, including applicable overhead, of installing and removing Company-furnished service facilities on and off the Customer premises.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 55"
+    },
+    {
+      "schedule_code": "A",
+      "rule_type": "minimum_charge",
+      "rule_text": "The Temporary Service Charge may not be less than $23.95.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 55"
+    },
+    {
+      "schedule_code": "A",
+      "rule_type": "formula",
+      "rule_text": "At a future permanent service location, the temporary-service charge is the net cost, including applicable overhead, in excess of the cost of furnishing permanent service. If primary lines or transformers are installed and the temporary-service charge omits their removal cost, the Customer pays any permanent-service line-extension charges; permanent-service extension provisions apply to the permanent portion, and permanent underground or pad-mounted facilities operating above 600 volts normally are not installed for temporary service.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 55"
+    },
+    {
+      "schedule_code": "A",
+      "rule_type": "cross_reference",
+      "rule_text": "For a qualifying overhead single-phase three-wire service drop or underground service from an existing secondary or pad-mounted transformer, the Customer may elect the currently effective Virginia SCC-approved flat charge instead of the Paragraph A or B charges, subject to specifications. The flat charge does not apply if the Company prepares an estimate under Paragraph A or B; its amount is external to this schedule document.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 55"
+    },
+    {
+      "schedule_code": "B",
+      "rule_type": "cross_reference",
+      "rule_text": "The applicable one-time facilities charge under Paragraph B is multiplied by the Tax Effect Recovery Factor specified in Schedule C — Miscellaneous and Standby Charges.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 56"
+    },
+    {
+      "schedule_code": "110",
+      "rule_type": "billing_month_seasons",
+      "rule_text": "Electricity Supply energy charges use summer billing months June through September and base billing months October through May, for both non-demand and demand billing.",
+      "origin": "plan_supplement",
+      "source_page": "PDF pp. 13–14"
+    },
+    {
+      "schedule_code": "132",
+      "rule_type": "period_definitions",
+      "rule_text": "For May 1 through September 30, Classification A and B on-peak hours are 11 a.m. to 9 p.m.; Classification C on-peak hours are 7 a.m. to 10 p.m. For October 1 through April 30, on-peak hours for all classifications are 6 a.m. to noon and 5 p.m. to 9 p.m.; the table separately specifies off-peak rates.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 28"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "formula",
+      "rule_text": "For an otherwise functional in-service MH or MV luminaire converted to an alternative standard luminaire/type/size on the same pole or post, the charge is estimated project cost less a $149-per-luminaire conversion credit; if Excess of Four Years’ Revenue excluding fuel revenue is greater, that revenue amount is the credit.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 59"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "formula",
+      "rule_text": "For an otherwise functional in-service MH, MV, or SV luminaire billed at a non-premium/basic rate and converted to an alternative Standard Basic or Standard Premium LED/type/size on the same pole or post, the charge is estimated project cost less a $130-per-luminaire conversion credit; if Excess of Four Years’ Revenue excluding fuel revenue is greater, that revenue amount is the credit.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 59"
+    },
+    {
+      "schedule_code": "D",
+      "rule_type": "formula",
+      "rule_text": "For an otherwise functional in-service MH, MV, or SV luminaire billed at a premium rate and converted to an alternative Standard Basic or Standard Premium LED/type/size on the same pole or post, the charge is estimated project cost less a $386-per-luminaire conversion credit; if Excess of Four Years’ Revenue excluding fuel revenue is greater, that revenue amount is the credit.",
+      "origin": "plan_supplement",
+      "source_page": "PDF p. 60"
+    },
+    {
+      "schedule_code": "SSL",
+      "rule_type": "tier_bands",
+      "rule_text": "For each Standard Basic distribution, Standard Premium distribution, and Electricity Supply tier: Tier 1 covers 0–9 monthly kWh and bills 5 kWh; Tier 2, 10–19 and 15 kWh; Tier 3, 20–29 and 25 kWh; Tier 4, 30–39 and 35 kWh; Tier 5, 40–49 and 45 kWh; Tier 6, 50–59 and 55 kWh; Tier 7, 60–69 and 65 kWh; Tier 8, 70–79 and 75 kWh; Tier 9, 80–89 and 85 kWh; Tier 10, 90–99 and 95 kWh.",
+      "origin": "plan_supplement",
+      "source_page": "PDF pp. 90–92"
+    }
+  ],
+  "unresolved": [
+    {
+      "schedule_code": "C",
+      "rule_type": "standby_minimum_formula_part_a",
+      "note": "The $3.01/kW phrase references Agreement Section XIII, whose text is not included in the Amendment 12 PDF. Preserve [garbled — verify]; do not infer missing formula language."
+    }
+  ]
+}

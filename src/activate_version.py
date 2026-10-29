@@ -22,7 +22,7 @@ def activate_version(conn, version_id):
         if draft is None:
             raise ValueError(f"Version {version_id} does not exist as a draft.")
 
-        failures = validate_drafts(conn)
+        failures = validate_drafts(conn, version_id)
         if failures:
             raise ValueError(
                 "Draft validation failed:\n- " + "\n- ".join(failures)

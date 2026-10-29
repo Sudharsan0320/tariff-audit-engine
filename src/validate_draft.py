@@ -48,19 +48,41 @@ def validate_drafts(conn, version_id=None):
             if not isinstance(value, str) or not value.strip():
                 failures.append(f"Draft version {draft_id} has an empty {field}.")
 
-    orphan_rows = conn.execute(
-        """
-        SELECT c.id, c.tariff_version_id
-        FROM tariff_components AS c
-        LEFT JOIN tariff_versions AS v ON v.id = c.tariff_version_id
-        WHERE v.id IS NULL
-        ORDER BY c.id
-        """
-    ).fetchall()
+    orphan_rows = (
+        conn.execute(
+            """
+            SELECT c.id, c.tariff_version_id
+            FROM tariff_components AS c
+            LEFT JOIN tariff_versions AS v ON v.id = c.tariff_version_id
+            WHERE v.id IS NULL
+            ORDER BY c.id
+            """
+        ).fetchall()
+        if version_id is None
+        else []
+    )
     for component_id, component_version_id in orphan_rows:
         failures.append(
             f"Component {component_id} references missing version "
             f"{component_version_id}."
+        )
+
+    orphan_rules = (
+        conn.execute(
+            """
+            SELECT r.id, r.tariff_version_id
+            FROM tariff_rules AS r
+            LEFT JOIN tariff_versions AS v ON v.id = r.tariff_version_id
+            WHERE v.id IS NULL
+            ORDER BY r.id
+            """
+        ).fetchall()
+        if version_id is None
+        else []
+    )
+    for rule_id, rule_version_id in orphan_rules:
+        failures.append(
+            f"Rule {rule_id} references missing version {rule_version_id}."
         )
 
     if draft_ids:
@@ -68,7 +90,8 @@ def validate_drafts(conn, version_id=None):
         components = conn.execute(
             f"""
             SELECT id, tariff_version_id, component_type, billing_category, rate,
-                   formula, unit, tier_min, tier_max, tier_unit, season, variant
+                   formula, unit, tier_min, tier_max, tier_unit, season, variant,
+                   billing_class
             FROM tariff_components
             WHERE tariff_version_id IN ({placeholders})
             ORDER BY id
@@ -90,6 +113,7 @@ def validate_drafts(conn, version_id=None):
                 tier_unit,
                 season,
                 variant,
+                billing_class,
             ) = component
 
             rate_present = rate is not None
@@ -109,7 +133,7 @@ def validate_drafts(conn, version_id=None):
                     failures.append(
                         f"Component {component_id} has an invalid rate: {rate!r}."
                     )
-                elif rate <= 0 and not (
+                elif rate < 0 and not (
                     isinstance(component_type, str)
                     and any(
                         token in component_type.lower()
@@ -144,6 +168,7 @@ def validate_drafts(conn, version_id=None):
                 tier_max,
                 season,
                 variant,
+                billing_class,
             )
             if key in seen_components:
                 failures.append(
@@ -152,6 +177,31 @@ def validate_drafts(conn, version_id=None):
                 )
             else:
                 seen_components[key] = component_id
+
+        rules = conn.execute(
+            f"""
+            SELECT id, tariff_version_id, rule_type, rule_text
+            FROM tariff_rules
+            WHERE tariff_version_id IN ({placeholders})
+            ORDER BY id
+            """,
+            tuple(sorted(draft_ids)),
+        ).fetchall()
+        seen_rules = {}
+        for rule_id, rule_version_id, rule_type, rule_text in rules:
+            if not isinstance(rule_type, str) or not rule_type.strip():
+                failures.append(f"Rule {rule_id} has an empty rule_type.")
+            if not isinstance(rule_text, str) or not rule_text.strip():
+                failures.append(f"Rule {rule_id} has an empty rule_text.")
+
+            key = (rule_version_id, rule_type, rule_text)
+            if key in seen_rules:
+                failures.append(
+                    f"Rules {seen_rules[key]} and {rule_id} are duplicates for "
+                    f"version {rule_version_id}."
+                )
+            else:
+                seen_rules[key] = rule_id
 
     return failures
 
@@ -166,7 +216,7 @@ def main():
             print(f"- {failure}")
         return 1
 
-    print("PASS: all draft versions and components validated.")
+    print("PASS: all draft versions, components, and rules validated.")
     return 0
 
 

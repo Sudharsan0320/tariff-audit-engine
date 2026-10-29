@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS tariff_components (
     tier_unit TEXT,
     season TEXT,
     variant TEXT,
+    billing_class TEXT,
     FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id)
 );
 """)
@@ -59,6 +60,90 @@ CREATE TABLE IF NOT EXISTS tariff_rules (
     rule_type TEXT NOT NULL,
     rule_text TEXT NOT NULL,
     FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id)
+);
+""")
+
+# --- usage_accounts: one row per extracted Dominion EAP account profile ---
+# status is 'stored' after validation or 'quarantine' when checks fail.
+# source_path + account_number is the idempotency key: re-running the same PDF
+# updates that row instead of inserting a duplicate.
+cur.execute("""
+CREATE TABLE IF NOT EXISTS usage_accounts (
+    id INTEGER PRIMARY KEY,
+    source_path TEXT NOT NULL,
+    account_number TEXT NOT NULL,
+    account_name TEXT,
+    customer_class TEXT,
+    mailing_address TEXT,
+    service_address TEXT,
+    current_rate_raw TEXT,
+    schedule_code TEXT,
+    turn_on_date DATE,
+    meter_numbers TEXT,
+    voltage TEXT,
+    delivery_phase TEXT,
+    minimum_demand TEXT,
+    facility_charge TEXT,
+    billing_status TEXT,
+    district_office TEXT,
+    status TEXT NOT NULL,
+    quarantine_reason TEXT,
+    UNIQUE(source_path, account_number)
+);
+""")
+
+# --- accounts: one row per account in a validated usage history ---
+cur.execute("""
+CREATE TABLE IF NOT EXISTS accounts (
+    account_number TEXT PRIMARY KEY,
+    customer_name TEXT,
+    service_address TEXT,
+    meter_number TEXT,
+    customer_class TEXT,
+    voltage TEXT,
+    delivery_phase TEXT,
+    turn_on_date DATE,
+    current_rate_raw TEXT
+);
+""")
+
+# --- bills: one row per account and billing period ---
+cur.execute("""
+CREATE TABLE IF NOT EXISTS bills (
+    id INTEGER PRIMARY KEY,
+    account_number TEXT NOT NULL,
+    bill_from DATE NOT NULL,
+    bill_to DATE NOT NULL,
+    billing_days INTEGER,
+    billed_rate_raw TEXT,
+    schedule_code TEXT,
+    total_consumption_kwh REAL,
+    demand_kw REAL,
+    total_billed NUMERIC,
+    source_file TEXT NOT NULL,
+    history_year_status TEXT NOT NULL DEFAULT 'complete',
+    FOREIGN KEY (account_number) REFERENCES accounts(account_number),
+    UNIQUE (account_number, bill_from, bill_to)
+);
+""")
+
+bill_columns = {
+    row[1] for row in cur.execute("PRAGMA table_info(bills)").fetchall()
+}
+if "history_year_status" not in bill_columns:
+    cur.execute(
+        "ALTER TABLE bills ADD COLUMN history_year_status "
+        "TEXT NOT NULL DEFAULT 'complete'"
+    )
+
+# --- bill_charges: one row per printed charge line, retaining its raw label ---
+cur.execute("""
+CREATE TABLE IF NOT EXISTS bill_charges (
+    id INTEGER PRIMARY KEY,
+    bill_id INTEGER NOT NULL,
+    line_label TEXT NOT NULL,
+    amount NUMERIC NOT NULL,
+    FOREIGN KEY (bill_id) REFERENCES bills(id)
 );
 """)
 

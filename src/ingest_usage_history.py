@@ -54,6 +54,26 @@ def _database_snapshot(conn):
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _usage_table_hashes(conn):
+    hashes = {}
+    for table in ("accounts", "bills", "bill_charges"):
+        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+        primary_key = [
+            row[1]
+            for row in sorted(
+                (row for row in conn.execute(f"PRAGMA table_info({table})") if row[5]),
+                key=lambda row: row[5],
+            )
+        ]
+        order = ", ".join(primary_key or columns)
+        rows = conn.execute(
+            f"SELECT {', '.join(columns)} FROM {table} ORDER BY {order}"
+        ).fetchall()
+        payload = json.dumps(rows, ensure_ascii=True, default=str, separators=(",", ":"))
+        hashes[table] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hashes
+
+
 def snapshot_hash(conn):
     """Return a stable hash of all rows in the three U1 usage tables."""
     return _database_snapshot(conn)
@@ -77,6 +97,23 @@ def _amount_for_sql(value):
     return float(Decimal(str(value)))
 
 
+def _insert_determinants(conn, bill_id, bill):
+    for determinant in bill.get("bill_determinants", []):
+        conn.execute(
+            """
+            INSERT INTO bill_determinants(
+                bill_id, label, determinant_type, value
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                bill_id,
+                determinant["label"],
+                determinant["determinant_type"],
+                _amount_for_sql(determinant["value"]),
+            ),
+        )
+
+
 def load_usage_draft(conn, draft):
     """Validate and transactionally load one draft, or return without writes."""
     conn.execute("PRAGMA foreign_keys = ON")
@@ -88,8 +125,45 @@ def load_usage_draft(conn, draft):
             conn.rollback()
             return "rejected", validation, before_hash
         if validation["idempotent"]:
+            if not validation["determinants_enrichment"]:
+                conn.commit()
+                return "no-op", validation, snapshot_hash(conn)
+
+            before_table_hashes = _usage_table_hashes(conn)
+            for bill in draft["bills"]:
+                row = conn.execute(
+                    """
+                    SELECT id FROM bills
+                    WHERE account_number = ? AND bill_from = ? AND bill_to = ?
+                    """,
+                    (
+                        bill["account_number"],
+                        bill["bill_from"],
+                        bill["bill_to"],
+                    ),
+                ).fetchone()
+                stored = {
+                    label
+                    for (label,) in conn.execute(
+                        "SELECT label FROM bill_determinants WHERE bill_id = ?",
+                        (row[0],),
+                    )
+                }
+                for determinant in bill.get("bill_determinants", []):
+                    if determinant["label"] not in stored:
+                        _insert_determinants(
+                            conn,
+                            row[0],
+                            {"bill_determinants": [determinant]},
+                        )
+            after_table_hashes = _usage_table_hashes(conn)
+            if before_table_hashes != after_table_hashes:
+                raise ValueError(
+                    "Determinant enrichment changed existing account, bill, "
+                    "or charge rows."
+                )
             conn.commit()
-            return "no-op", validation, snapshot_hash(conn)
+            return "enriched", validation, snapshot_hash(conn)
 
         account = draft["account"]
         existing_account = conn.execute(
@@ -153,6 +227,7 @@ def load_usage_draft(conn, draft):
                         _amount_for_sql(charge["amount"]),
                     ),
                 )
+            _insert_determinants(conn, cursor.lastrowid, bill)
         conn.commit()
         return "loaded", validation, snapshot_hash(conn)
     except Exception:

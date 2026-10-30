@@ -35,9 +35,15 @@ versioned rows with a draft → active lifecycle and a validation gate.
 - `src/validate_usage.py` — validates monthly usage drafts against the U1 schema
 - `src/ingest_usage_history.py` — validates and transactionally loads U1
   accounts, bills, and bill charges; exact re-ingestion is a no-op
+- `src/billing_engine.py` — resolves active tariff versions and evaluates
+  tariff components with `Decimal`
+- `src/audit_bills.py` — maps bill labels, recomputes pilot bills, and stores
+  idempotent audit runs and line verdicts
 - `src/ingest_usage.py` — earlier account-profile scaffold, retained separately
 - `data/` — raw PDFs and the SQLite database (never committed to git)
 - `tests/` — unit tests mirroring src/
+- `docs/bill-label-mapping.json` — reviewed bill-label dispositions and
+  applicability notes
 - `docs/` — learning notes
 
 Run the lifecycle gate, then activate a version only after it passes:
@@ -54,6 +60,7 @@ Review a native-PDF Dominion EAP draft, then run the validated U1 loader:
 python src/create_db.py
 python src/parse_usage.py data/raw/1172485896__EAP_Report.pdf
 python src/ingest_usage_history.py data/raw/1172485896__EAP_Report.pdf
+python src/audit_bills.py
 ```
 
 ## Status
@@ -75,5 +82,20 @@ python src/ingest_usage_history.py data/raw/1172485896__EAP_Report.pdf
   from the source and is not synthesized. Repeat ingestion is a no-op with an
   unchanged three-table snapshot hash. The legacy profile scaffold remains
   separate; CSV ingestion is not used, and scanned PDFs/OCR remain out of scope.
-- Next: config-driven billing and Phase 5 recompute-and-compare audits, using
-  the fully covered 2025 VE-120 periods as the pilot set
+- Phase 5: complete for the August–October 2025 VE-120 pilot. Generic bill
+  determinants are stored in `bill_determinants`; the enrichment added 96
+  rows while preserving the `accounts`, `bills`, and `bill_charges` snapshot.
+  The checked-in [`bill-label-mapping.json`](docs/bill-label-mapping.json)
+  dispositions all 32 pilot labels. The current mapping version has three
+  runs and 96 line verdicts in `audit_runs`/`audit_lines` (prior mapping
+  versions remain separately recorded); every pilot line is accounted for,
+  all 16 direct mappings reproduce their billed amounts, and the three
+  like-for-like totals match exactly ($95.75, $101.67, and $114.45).
+  Tax remains itemized and out of scope. The optional G-CM contribution is
+  not applied without election data; minimum charge is not evaluated without
+  a contracted amount. Schedule 110 is repriced for information, but
+  eligibility is not established, so no cheaper-rate flag is raised. A
+  separate price-anomaly check is unavailable because stored bill lines do
+  not include printed unit rates.
+- Next: make the Path C decision — keep this as a personal portfolio engine
+  or point it at OpenTariff — now that the thin slice is working end to end.

@@ -220,3 +220,158 @@ and amounts match the source after the documented V6 omission.
 The full suite passes with `PYTHONPATH=. pytest -q`. The legacy
 `usage_accounts` row remains unchanged. No study-guide file is present in this
 workspace; the README states that Phase 4 uses native PDFs, not CSV.
+
+## Phase 5 — Config-driven billing and audits
+
+### Decisions and pre-flight
+
+The Phase 5 B1–B5 decisions are implemented as written:
+
+- **B1:** August–October 2025 are the pilot; the July straddle bill and
+  proration are deferred.
+- **B2:** [`bill-label-mapping.json`](./bill-label-mapping.json) is the
+  reviewed mapping artifact. The engine has no bill-label, schedule-code, or
+  tariff-rate constants.
+- **B3:** `audit_runs` and `audit_lines` store mapping-versioned, tariff-
+  snapshot-bound outputs. Identical input hashes are a no-op.
+- **B4:** database numeric values are read through `Decimal(str(value))`;
+  line expected amounts round with `ROUND_HALF_UP`. A delta of at most $0.01
+  is a match; over/under flags begin at $0.02.
+- **B5:** determinant enrichment adds source values without changing existing
+  account, bill, or charge rows.
+
+The pre-flight found no determinant table. `parse_usage.py` now retains every
+numeric row in each bill's **Bill Determinants** block with its printed label,
+normalized type, and value. The 31 stored bills received 96 determinant rows.
+For the pilot bills, stored total/on-peak/off-peak usage is:
+
+| Bill to | Total kWh | On-peak kWh | Off-peak kWh |
+|---|---:|---:|---:|
+| 2025-08-13 | 731 | 289 | 442 |
+| 2025-09-12 | 783 | 289 | 494 |
+| 2025-10-13 | 884 | 364 | 520 |
+
+The enrichment ran through `load_usage_draft`'s exact-match path. The stable
+hashes of `accounts`, `bills`, and `bill_charges` were identical before and
+after; the original three-table snapshot hash also remained unchanged. Demand
+is present for older periods but is null for these 120 bills and is not needed
+for this pilot.
+
+### Census and mapping worksheet
+
+The pilot label census contains 32 labels. The active 120 component census
+contains 18 components: four schedule components and 14 rider components.
+Every printed label is dispositioned in the config, and every direct mapping
+has a passing rate-times-determinant witness in at least one pilot bill.
+
+| Printed bill label | Disposition | Amendment 12 component / evidence |
+|---|---|---|
+| Basic Cust. Charges | direct | `basic_customer_charge` |
+| Energy DIS | direct | `distribution_energy` |
+| On Peak Energy ESS | direct | `es_energy`, variant `on_peak` |
+| Off Peak Energy ESS | direct | `es_energy`, variant `off_peak` |
+| Transmission Energy | direct | `rider_t_cm` |
+| Fuel Chg | direct | `fuel_charge_rider_a` |
+| Rider CCR | direct | `rider_ccr_cm` |
+| Rider CE kWh | direct | `rider_ce_cm` |
+| Rider DIST kWh | direct | `rider_dist_cm` |
+| Rider E kWh | direct | `rider_e_cm` |
+| Rider GEN kWh | direct | `rider_gen_cm` |
+| Rider OSW KWh | direct | `rider_osw_cm` |
+| Rider RBB kWh | direct | `rider_rbb_cm` |
+| Rider RPS | direct | `rider_rps_cm` |
+| Rider SMR KWh | direct | `rider_smr_cm` |
+| Rider SNA KWh | direct | `rider_sna_cm` |
+| Rider B kWh | zero expected | printed as zero in all pilot bills |
+| Rider BW kWh | zero expected | printed as zero in all pilot bills |
+| Rider GV kWh | zero expected | printed as zero in all pilot bills |
+| Ridr GT | zero expected | raw misspelled label retained; printed as zero |
+| Rider U1 kWh | zero expected | printed as zero in all pilot bills |
+| Rider U2 kWh | zero expected | printed as zero in all pilot bills |
+| Rider US-2 kWh | zero expected | printed as zero in all pilot bills |
+| Rider US-3 kWh | zero expected | printed as zero in all pilot bills |
+| Rider US-4 kWh | zero expected | printed as zero in all pilot bills |
+| Rider W kWh | zero expected | printed as zero in all pilot bills |
+| Rider S kWh | zero expected | printed as zero in all pilot bills |
+| Rider R kWh | zero expected | printed as zero in all pilot bills |
+| Rider RGGI | zero expected | printed as zero in all pilot bills |
+| Rider PPA | zero expected | printed as zero in all pilot bills |
+| Rider PIPP | zero expected | printed as zero in all pilot bills |
+| Virginia Tax Surcharge | out of scope | statutory tax; present-only, excluded from tariff totals |
+
+The remaining component census entries are `rider_g_cm`, which is optional by
+its stored contribution-options rule and has no customer-election evidence,
+and `rider_pipp_cm`, whose stored rate is zero. Rider K and L have no 120
+billing-category component. These are not treated as missing universally
+applicable line items.
+
+### Computation and August hand-check
+
+`billing_engine.py` resolves exactly one active version by the bill-to date
+and refuses a bill period that is not wholly covered by that version. This
+rejects pre-July 2025 bills and the July straddle rather than estimating
+proration. Schedule components and applicable rider components come from the
+database; on/off-peak routing uses the component variant and the stored
+determinants. Flat, per-unit, and marginal tier blocks are supported. Formula
+components have no general expression evaluator and fail explicitly if one is
+requested.
+
+The August bill-to 2025-08-13 hand-check below uses the persisted tariff rates
+and determinants. Each expected amount is rounded at the line level:
+
+| Bill line | Database rate | Determinant | Expected |
+|---|---:|---:|---:|
+| Basic Cust. Charges | $7.59/month | flat | $7.59 |
+| Energy DIS | $0.01670/kWh | 731 total kWh | $12.21 |
+| On Peak Energy ESS | $0.04289/kWh | 289 on-peak kWh | $12.40 |
+| Off Peak Energy ESS | $0.02637/kWh | 442 off-peak kWh | $11.66 |
+| Transmission Energy | $0.018961/kWh | 731 total kWh | $13.86 |
+| Fuel Chg | $0.020968/kWh | 731 total kWh | $15.33 |
+| Rider CCR | $0.001242/kWh | 731 total kWh | $0.91 |
+| Rider CE kWh | $0.001673/kWh | 731 total kWh | $1.22 |
+| Rider DIST kWh | $0.004063/kWh | 731 total kWh | $2.97 |
+| Rider E kWh | $0.000730/kWh | 731 total kWh | $0.53 |
+| Rider GEN kWh | $0.004320/kWh | 731 total kWh | $3.16 |
+| Rider OSW KWh | $0.007003/kWh | 731 total kWh | $5.12 |
+| Rider RBB kWh | $0.000473/kWh | 731 total kWh | $0.35 |
+| Rider RPS | $0.008637/kWh | 731 total kWh | $6.31 |
+| Rider SMR KWh | $0.000222/kWh | 731 total kWh | $0.16 |
+| Rider SNA KWh | $0.002699/kWh | 731 total kWh | $1.97 |
+
+The 16 direct amounts sum to $95.75. The printed bill total is $96.49; the
+$0.74 Virginia Tax Surcharge is itemized out of scope, leaving an exact
+like-for-like match.
+
+### Audit results and bounded checks
+
+Each pilot bill has 32 stored charge lines and 32 verdict rows: 16 direct
+matches, 15 zero-expected matches, and one out-of-scope tax line. There are no
+missing lines, over/under charges, or withdrawn-rider violations. Like-for-like
+comparisons are:
+
+| Bill to | Billed | Expected | Delta | Tax, excluded |
+|---|---:|---:|---:|---:|
+| 2025-08-13 | $95.75 | $95.75 | $0.00 | $0.74 |
+| 2025-09-12 | $101.67 | $101.67 | $0.00 | $0.80 |
+| 2025-10-13 | $114.45 | $114.45 | $0.00 | $0.90 |
+
+The `audit_runs` input fingerprint includes the mapping-file hash, bill data,
+determinants, charge rows, and tariff snapshot. The current
+`phase5-v3` mapping has one run per pilot bill; repeating the same run creates
+no rows and retains the same snapshot hash. Earlier mapping-version runs are
+retained separately.
+
+The minimum charge is reported as not applicable because the stored rule
+requires a contracted amount that is absent. Rider G-CM is reported as
+conditional and not applied without an election. Schedule 110 is repriced
+informationally as non-demand by its stored billing-class structure; its
+schedule-only totals exceed Schedule 120 in all three months. Eligibility for
+110 is not established by the stored rules, so no cheaper-rate flag is raised.
+Schedule 120 matches the reviewed account/service eligibility note in the
+mapping. A separate price-anomaly flag cannot be evaluated because stored
+bill lines contain amounts but no printed per-line billed rates; amount
+differences remain explicit OVER/UNDER misbill findings.
+
+The full test suite passes with `PYTHONPATH=. pytest -q`. July proration,
+tax calculation, contracted minimums, and pre-July 2025 bills remain outside
+Phase 5.

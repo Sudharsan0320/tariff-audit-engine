@@ -205,6 +205,63 @@ def _bill_matches_database(conn, bill, resolution):
     return actual_charges == expected_charges
 
 
+def _determinants_for_bill(conn, bill):
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'bill_determinants'"
+    ).fetchone()
+    expected = bill.get("bill_determinants", [])
+    if not table_exists:
+        return (not expected, False, "bill_determinants table is missing")
+
+    row = conn.execute(
+        """
+        SELECT id FROM bills
+        WHERE account_number = ? AND bill_from = ? AND bill_to = ?
+        """,
+        (bill.get("account_number"), bill.get("bill_from"), bill.get("bill_to")),
+    ).fetchone()
+    if row is None:
+        return False, False, "stored bill is missing"
+
+    stored = conn.execute(
+        """
+        SELECT label, determinant_type, value
+        FROM bill_determinants WHERE bill_id = ?
+        """,
+        (row[0],),
+    ).fetchall()
+    try:
+        stored_by_label = {
+            label: (determinant_type, _as_decimal(value))
+            for label, determinant_type, value in stored
+        }
+    except ValueError:
+        return False, False, "stored determinant value is invalid"
+    expected_by_label = {}
+    for determinant in expected:
+        label = determinant.get("label")
+        determinant_type = determinant.get("determinant_type")
+        if not isinstance(label, str) or not label.strip():
+            return False, False, "expected determinant label is invalid"
+        if not isinstance(determinant_type, str) or not determinant_type.strip():
+            return False, False, f"expected determinant {label!r} has no type"
+        try:
+            value = _as_decimal(determinant.get("value"))
+        except ValueError:
+            return False, False, f"invalid expected determinant {label!r}"
+        if label in expected_by_label:
+            return False, False, f"duplicate expected determinant {label!r}"
+        expected_by_label[label] = (determinant_type, value)
+
+    if any(label not in expected_by_label for label in stored_by_label):
+        return False, False, "stored determinants do not match the source draft"
+    for label, (determinant_type, value) in stored_by_label.items():
+        if expected_by_label[label] != (determinant_type, value):
+            return False, False, f"stored determinant {label!r} conflicts with source"
+    return True, len(stored_by_label) < len(expected_by_label), None
+
+
 def _charge_sum(bill):
     total = Decimal(0)
     for charge in bill.get("bill_charges", []):
@@ -404,6 +461,38 @@ def validate_usage_draft(draft, conn):
                     f"{context}: negative as-printed charge {amount} on line {label!r}."
                 )
 
+        seen_determinants = set()
+        for determinant_index, determinant in enumerate(
+            bill.get("bill_determinants", []), start=1
+        ):
+            label = determinant.get("label")
+            determinant_type = determinant.get("determinant_type")
+            if not isinstance(label, str) or not label.strip():
+                failures.append(
+                    f"{context}: determinant {determinant_index} has no printed label."
+                )
+            if not isinstance(determinant_type, str) or not determinant_type.strip():
+                failures.append(
+                    f"{context}: determinant {determinant_index} has no normalized type."
+                )
+            if isinstance(label, str):
+                if label in seen_determinants:
+                    failures.append(
+                        f"{context}: duplicate determinant label {label!r}."
+                    )
+                seen_determinants.add(label)
+            try:
+                determinant_value = _as_decimal(determinant.get("value"))
+            except ValueError as error:
+                failures.append(
+                    f"{context}: determinant {label!r} {error}."
+                )
+            else:
+                if determinant_value < 0:
+                    failures.append(
+                        f"{context}: determinant {label!r} must be non-negative."
+                    )
+
     parsed_periods.sort(key=lambda item: item[0])
     for previous, current in zip(parsed_periods, parsed_periods[1:]):
         if current[0] <= previous[1]:
@@ -463,6 +552,7 @@ def validate_usage_draft(draft, conn):
         )
 
     idempotent = False
+    determinants_enrichment = False
     if existing_periods:
         account_matches = _account_matches_database(conn, account)
         stored_bill_count = conn.execute(
@@ -479,13 +569,43 @@ def validate_usage_draft(draft, conn):
             )
         except (TypeError, ValueError, InvalidOperation):
             all_bills_match = False
-        if account_matches and all_periods_exist and all_bills_match and not failures:
+        determinants_match = True
+        determinant_enrichment_needed = False
+        determinant_mismatch = None
+        if account_matches and all_periods_exist and all_bills_match:
+            for bill in bills:
+                matches, needs_enrichment, mismatch = _determinants_for_bill(
+                    conn, bill
+                )
+                if not matches:
+                    determinants_match = False
+                    determinant_mismatch = mismatch
+                    break
+                determinant_enrichment_needed |= needs_enrichment
+        if (
+            account_matches
+            and all_periods_exist
+            and all_bills_match
+            and determinants_match
+            and not failures
+        ):
             idempotent = True
-            warnings.append(
-                "Exact source and billing rows already exist; ingestion is an "
-                "explicit idempotent no-op."
-            )
+            determinants_enrichment = determinant_enrichment_needed
+            if determinants_enrichment:
+                warnings.append(
+                    "Exact account, bill, and charge rows already exist; "
+                    "only missing source determinants will be added."
+                )
+            else:
+                warnings.append(
+                    "Exact source and billing rows already exist; ingestion is an "
+                    "explicit idempotent no-op."
+                )
         else:
+            if determinant_mismatch:
+                failures.append(
+                    f"Account {account_number!r}: {determinant_mismatch}."
+                )
             for bill in bills:
                 period_key = None
                 try:
@@ -579,6 +699,7 @@ def validate_usage_draft(draft, conn):
         "annual_variances": annual_variances,
         "basic_charge_resolution": resolution,
         "idempotent": idempotent,
+        "determinants_enrichment": determinants_enrichment,
     }
 
 

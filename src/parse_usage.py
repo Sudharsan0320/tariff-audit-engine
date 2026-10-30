@@ -251,7 +251,12 @@ def _new_month(month_name, year):
         "bill_summary_subtotal": None,
         "bill_summary_rollups": [],
         "bill_charges": [],
+        "bill_determinants": [],
     }
+
+
+def _determinant_type(label):
+    return re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
 
 
 def _extract_history(pdf):
@@ -260,6 +265,7 @@ def _extract_history(pdf):
     current_months = []
     centers = []
     in_bill_summary = False
+    in_bill_determinants = False
     year_pattern = re.compile(r"Historical Electricity Usage\s*-\s*(20\d{2})", re.I)
 
     for page in pdf.pages:
@@ -272,6 +278,7 @@ def _extract_history(pdf):
                 current_months = []
                 centers = []
                 in_bill_summary = False
+                in_bill_determinants = False
                 continue
             if current_section is None:
                 continue
@@ -288,14 +295,20 @@ def _extract_history(pdf):
                     for month in current_months
                 ]
                 in_bill_summary = False
+                in_bill_determinants = False
                 continue
             if not centers:
                 continue
 
             label, cells = _row_cells(words, centers)
             normalized_label = re.sub(r"\s+", " ", label).strip()
+            if normalized_label == "Bill Determinants":
+                in_bill_determinants = True
+                in_bill_summary = False
+                continue
             if normalized_label == "Bill Summary":
                 in_bill_summary = True
+                in_bill_determinants = False
                 continue
 
             field_name = {
@@ -310,11 +323,32 @@ def _extract_history(pdf):
                 for month, value in zip(current_section["months"], cells):
                     parsed = _parse_cell_value(normalized_label, value)
                     month[field_name] = parsed
+                    if in_bill_determinants and parsed is not None:
+                        month["bill_determinants"].append(
+                            {
+                                "label": normalized_label,
+                                "determinant_type": _determinant_type(normalized_label),
+                                "value": parsed,
+                            }
+                        )
                     if field_name == "billed_rate_raw" and parsed:
                         try:
                             month["schedule_code"] = normalize_schedule_code(parsed)
                         except ValueError:
                             month["schedule_code"] = None
+                continue
+
+            if in_bill_determinants:
+                for month, value in zip(current_section["months"], cells):
+                    parsed = _decimal(value)
+                    if parsed is not None:
+                        month["bill_determinants"].append(
+                            {
+                                "label": normalized_label,
+                                "determinant_type": _determinant_type(normalized_label),
+                                "value": parsed,
+                            }
+                        )
                 continue
 
             if re.match(r"^\*{0,2}\s*(?:total charges|total billed|bill total)\b", normalized_label, re.I):

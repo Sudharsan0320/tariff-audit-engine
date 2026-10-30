@@ -147,6 +147,52 @@ CREATE TABLE IF NOT EXISTS bill_charges (
 );
 """)
 
+cur.execute("""
+CREATE TABLE IF NOT EXISTS bill_determinants (
+    id INTEGER PRIMARY KEY,
+    bill_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    determinant_type TEXT NOT NULL,
+    value NUMERIC NOT NULL,
+    FOREIGN KEY (bill_id) REFERENCES bills(id),
+    UNIQUE (bill_id, label)
+);
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS audit_runs (
+    id INTEGER PRIMARY KEY,
+    bill_id INTEGER NOT NULL,
+    mapping_version TEXT NOT NULL,
+    tariff_snapshot_hash TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    result_hash TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (bill_id) REFERENCES bills(id),
+    UNIQUE (bill_id, input_hash)
+);
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS audit_lines (
+    id INTEGER PRIMARY KEY,
+    audit_run_id INTEGER NOT NULL,
+    bill_charge_id INTEGER,
+    line_label TEXT NOT NULL,
+    disposition TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    tariff_component_id INTEGER,
+    billed_amount TEXT,
+    expected_amount TEXT,
+    delta TEXT,
+    detail TEXT,
+    FOREIGN KEY (audit_run_id) REFERENCES audit_runs(id),
+    FOREIGN KEY (bill_charge_id) REFERENCES bill_charges(id),
+    FOREIGN KEY (tariff_component_id) REFERENCES tariff_components(id)
+);
+""")
+
 conn.commit()  # commit() SAVES all changes into the file; without it, everything above is thrown away when you close
 conn.close()  # close() ends the connection, freeing it up
 print("Database created: data/tariffs.db")  # print() shows text on screen; confirms the script finished

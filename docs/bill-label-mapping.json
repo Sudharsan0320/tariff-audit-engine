@@ -1,0 +1,171 @@
+{
+  "mapping_version": "phase5-v3",
+  "pilot_bill_to": {
+    "from": "2025-08-01",
+    "through": "2025-10-31"
+  },
+  "tariff_identity": {
+    "state": "VA",
+    "utility": "Virginia Electric and Power Company"
+  },
+  "eligibility": {
+    "schedule_code": "120",
+    "status": "established",
+    "reason": "The project-verified service is Tralee SPS; the stored account profile identifies County of New Kent at 5680 Tralee Ln. The reviewed Schedule 120 applicability is water and sewage pumping service."
+  },
+  "alternative_schedule": {
+    "schedule_code": "110",
+    "billing_class": "non_demand",
+    "eligibility_status": "not_established",
+    "eligibility_note": "Schedule 110 is repriced for information only. Eligibility for this sewage pumping service is not established by the stored tariff rules, so a cheaper-rate flag cannot be raised."
+  },
+  "labels": {
+    "Basic Cust. Charges": {
+      "disposition": "direct",
+      "component_type": "basic_customer_charge",
+      "evidence": "The flat monthly component reproduces the printed amount in each fully covered pilot bill."
+    },
+    "Energy DIS": {
+      "disposition": "direct",
+      "component_type": "distribution_energy",
+      "evidence": "The component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "On Peak Energy ESS": {
+      "disposition": "direct",
+      "component_type": "es_energy",
+      "variant": "on_peak",
+      "evidence": "The on-peak component rate multiplied by stored on-peak usage reproduces the printed amount in each pilot bill."
+    },
+    "Off Peak Energy ESS": {
+      "disposition": "direct",
+      "component_type": "es_energy",
+      "variant": "off_peak",
+      "evidence": "The off-peak component rate multiplied by stored off-peak usage reproduces the printed amount in each pilot bill."
+    },
+    "Transmission Energy": {
+      "disposition": "direct",
+      "component_type": "rider_t_cm",
+      "evidence": "The T-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Fuel Chg": {
+      "disposition": "direct",
+      "component_type": "fuel_charge_rider_a",
+      "evidence": "Rider A's component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider CCR": {
+      "disposition": "direct",
+      "component_type": "rider_ccr_cm",
+      "evidence": "The CCR-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider CE kWh": {
+      "disposition": "direct",
+      "component_type": "rider_ce_cm",
+      "evidence": "The CE-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider DIST kWh": {
+      "disposition": "direct",
+      "component_type": "rider_dist_cm",
+      "evidence": "The DIST-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider E kWh": {
+      "disposition": "direct",
+      "component_type": "rider_e_cm",
+      "evidence": "The E-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider GEN kWh": {
+      "disposition": "direct",
+      "component_type": "rider_gen_cm",
+      "evidence": "The GEN-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider OSW KWh": {
+      "disposition": "direct",
+      "component_type": "rider_osw_cm",
+      "evidence": "The OSW-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider RBB kWh": {
+      "disposition": "direct",
+      "component_type": "rider_rbb_cm",
+      "evidence": "The RBB-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider RPS": {
+      "disposition": "direct",
+      "component_type": "rider_rps_cm",
+      "evidence": "The RPS-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider SMR KWh": {
+      "disposition": "direct",
+      "component_type": "rider_smr_cm",
+      "evidence": "The SMR-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider SNA KWh": {
+      "disposition": "direct",
+      "component_type": "rider_sna_cm",
+      "evidence": "The SNA-CM component rate multiplied by total-consumption kWh reproduces the printed amount in each pilot bill."
+    },
+    "Rider B kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider BW kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider GV kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Ridr GT": {
+      "disposition": "zero_expected",
+      "evidence": "The raw printed label is preserved; its amount is zero on all three stored pilot bills."
+    },
+    "Rider U1 kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider U2 kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider US-2 kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider US-3 kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider US-4 kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider W kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider S kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider R kWh": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider RGGI": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider PPA": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Rider PIPP": {
+      "disposition": "zero_expected",
+      "evidence": "The printed line is zero on all three stored pilot bills under Amendment 12."
+    },
+    "Virginia Tax Surcharge": {
+      "disposition": "out_of_scope",
+      "reason": "Statutory surcharge; no corresponding tariff component is stored.",
+      "evidence": "The printed tax line is retained as present-only and excluded from like-for-like tariff totals."
+    }
+  }
+}

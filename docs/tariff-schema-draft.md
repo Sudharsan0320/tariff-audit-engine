@@ -50,3 +50,27 @@ Given a bill dated D for state S, utility U, schedule C:
 find the tariff_versions row where state=S, utility=U, schedule_code=C,
 status='active', effective_from <= D and (effective_to is empty or D < effective_to).
 Then load all tariff_components rows for that version's id.
+
+## Phase 5 additive tables
+
+`src/create_db.py` creates the following tables additively alongside the
+existing tariff and usage tables:
+
+- **bill_determinants** — `bill_id`, raw `label`, normalized
+  `determinant_type`, and numeric `value`; `(bill_id, label)` is unique.
+  Enrichment may add determinant rows to an exact existing account/bill/charge
+  snapshot, but must not alter those three existing tables.
+- **audit_runs** — one reproducible bill audit, keyed by bill and input hash.
+  It records the reviewed `mapping_version`, `tariff_snapshot_hash`,
+  `input_hash`, `result_hash`, and serialized report. A repeated identical
+  input is a no-op; a changed mapping or tariff snapshot creates a separately
+  versioned run.
+- **audit_lines** — one verdict for each stored bill charge, plus explicit
+  `MISSING` rows for applicable mapped components with no bill line. Billed,
+  expected, and delta amounts are stored as text to preserve decimal output.
+  The tax line is retained as `OUT-OF-SCOPE`, not included in like-for-like
+  tariff totals.
+
+The evaluator converts database numeric rates and amounts through
+`Decimal(str(value))`; audit amounts are rounded per line to cents with
+`ROUND_HALF_UP`.

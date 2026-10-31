@@ -939,3 +939,51 @@ bill still resolves to the version in force on its date. Activation checks
 ("exactly one active version") count only `active` rows. No stored row changes:
 live data has one version per schedule, all `active` (41), and none is
 superseded until a second amendment is activated.
+
+## Stage 7 — B7: URDB reconciliation
+
+**Purpose.** A second pair of eyes on the parser: compare stored rates with a
+public dataset (OpenEI's U.S. Utility Rate Database, bulk CSV) and flag
+disagreements for human review. A disagreement is a flag, not a verdict — either
+side can be wrong or the two can describe different things.
+
+**Coverage caveat (stated up front).** The parsed book is the VEPGA Amendment 12
+schedules (governmental/JPA schedules). URDB covers retail utility tariffs, so a
+live run may find few or zero counterparts. Zero matches is a truthful result,
+not a failure; the mechanism is what this stage proves.
+
+**Module.** `src/urdb_reconcile.py` (`--csv <path> --utility "<name>"`, repeatable
+`--utility`, optional `--versions` ids and `--map "rate name=code"`). It streams the
+extract (`.csv` or `.csv.gz`), keeps rows whose `utility` equals a given name, and
+reads stored components read-only. The extract is never written. Reports go to
+`data/reports/urdb-<utility>-reconciliation.{json,md}` (gitignored) and are
+deterministic (no wall clock).
+
+**Matching rule (explicit, recorded in every report).** A URDB rate corresponds to
+a stored schedule only when its rate name contains "Schedule `<code>`" as a whole
+token (case-insensitive), or the caller supplied an explicit rate-name = code
+mapping. The URDB start/end dates must overlap the stored version's effective
+range, else the row is listed unmatched. Numbers that happen to be equal never
+create a match. Each item carries its `basis`.
+
+**What is compared.** The fixed monthly charge (`basic_customer_charge`,
+`usd_per_unit_month`, versus `fixedchargefirstmeter` in `$/month`) and flat energy
+rates (stored non-tiered `usd_per_kwh` base components, excluding riders, versus a
+URDB structure with exactly one period and one tier in kWh). A stored schedule
+with several fixed or flat components agrees if any one equals the URDB value;
+the others are listed `unmatched_ours`. URDB structures with several
+periods/tiers are listed `unmatched_theirs`, not forced.
+
+**Tolerance.** 0.000001 on both quantities; our side stays Decimal, theirs is read
+as Decimal text. Anything beyond is a disagreement, reported with ours, theirs,
+and delta = theirs − ours against the nearest stored component.
+
+**Four-way output.** `agree`, `disagree`, `unmatched_ours`, `unmatched_theirs`.
+
+**Live-run outcome.** The bulk file (`usurdb.csv.gz`, 12 MB, 58,920 rates) was
+fetched once from OpenEI's USURDB download into `data/external/` (gitignored). The
+utility names present for Dominion/Virginia were "Virginia Electric & Power Co"
+and "Virginia Electric & Power Co (North Carolina)" (243 rates, dated mostly
+2012–2016, named like "GS-1" and "Residential Schedule 1"). Against the 41 active
+versions: agree 0, disagree 0, unmatched_ours 35, unmatched_theirs 243 — no URDB
+rate name corresponds to a VEPGA schedule, as expected from the caveat above.

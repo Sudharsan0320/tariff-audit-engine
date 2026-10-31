@@ -1,5 +1,7 @@
 # Tariff Audit Engine
 
+[![CI](https://github.com/Sudharsan0320/tariff-audit-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Sudharsan0320/tariff-audit-engine/actions/workflows/ci.yml)
+
 A production-grade rebuild of an electricity tariff billing audit tool.
 It recalculates customer bills under multiple rate schedules to find savings.
 
@@ -105,5 +107,19 @@ python src/audit_bills.py
   (surrogate ids, timestamps, superseded audit history, and the legacy
   `usage_accounts` row excluded), and a run against the live database was a
   verified no-op. `--stage`, `--from-stage`, and `--dry-run` are available.
+- Phase 8: complete. Postgres is the primary database and runs as a Docker
+  stack (`docker compose up`: `postgres` + `api`); `data/tariffs.db` is kept as
+  the frozen pre-Phase-8 SQLite artifact. `src/db.py` selects the database from
+  `TARIFF_DB_URL` (default: the SQLite file, so the existing workflow is
+  unchanged). A FastAPI app (`src/api.py`) exposes versions, bills and audit
+  verdicts and accepts tariff and bill PDF uploads through the same parsers and
+  gates (refusals are 4xx with the failure list); `/` serves a one-file upload
+  page and `/docs` the API explorer. The audit snapshot hash no longer depends
+  on surrogate ids. GitHub Actions runs a build-and-boot smoke on every push
+  (not the test suite, which stays local). The API binds to localhost with no
+  authentication — a deliberate single-user posture. Run it:
+  `cp .env.example .env && docker compose up -d`, then
+  `docker compose run --rm api python src/run_pipeline.py` and open
+  `http://127.0.0.1:8000/`.
 - Next: make the Path C decision — keep this as a personal portfolio engine
   or point it at OpenTariff — now that the thin slice is working end to end.

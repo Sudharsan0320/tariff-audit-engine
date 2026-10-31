@@ -601,3 +601,93 @@ hashes are not portable across databases.
 Suite after Phase 7: 207 passed (206 unit, 1 integration), local-only.
 Out of scope and untouched: scheduling/CI, external orchestrators, Postgres,
 parallelism, ingesting new accounts, scaffold cleanup.
+
+## Phase 8 — Postgres, API, upload page, Docker, CI
+
+Decisions E1–E5 ratified as written: E1 one static page served by the API; E2
+Postgres primary with the SQLite file frozen (not deleted); E3 a connection
+factory, no ORM; E4 CI is build-and-boot only; E5 localhost, no auth.
+
+### 8a — Dialect audit (grep-proven)
+
+About 74 SQLite-specific sites, all handled either in `src/db.py` or in the
+legacy files that deliberately stay SQLite-only:
+
+| SQLite-ism | Where | Handling |
+|---|---|---|
+| `sqlite3.connect` / `sqlite3.Error` | every CLI | `db.connect` / `db.Error` (mechanical) |
+| `?` placeholders, literal `%` (`LIKE 'RIDER %'`) | all SQL | translated to `%s`, `%` escaped (shim) |
+| `BEGIN IMMEDIATE` | activate, audit, enrich, ingest, load_rules, parse_rider | transaction-scoped advisory lock (shim; needs care) |
+| `PRAGMA foreign_keys` | enrich, ingest | no-op on Postgres (foreign keys always enforced) |
+| `PRAGMA table_info` | create_db, ingest snapshot helpers, run_pipeline, compare | emulated from `information_schema` |
+| `sqlite_master` | audit_bills, validate_usage, run_pipeline, compare | subselect over `information_schema.tables` |
+| `cursor.lastrowid` | audit, cross-reference, ingest, parse_rider, parse_rider_gen, parse_schedule | `INSERT … RETURNING id` on tables with an `id` column |
+| DDL types | create_db | `INTEGER PRIMARY KEY` → identity; `REAL`/`NUMERIC` → `DOUBLE PRECISION` (preserves SQLite float storage); `DATE` → `TEXT` |
+| `json_array` | compare_databases | replaced by a Python-side join |
+| `ON CONFLICT`, `sqlite3.Row` | legacy `ingest_usage.py`, legacy `validate_usage.main()` | left SQLite-only (scaffold) |
+| one-time migration | `migrate_source_file_paths.py` | left SQLite-only (completed) |
+
+Behavioural differences found and handled: text collation (Postgres must be
+initialised `--locale=C --encoding=UTF8`, or `ORDER BY` differs from SQLite and
+text comes back as bytes — found by the in-container run, fixed in both
+`db.connect` and compose); NULL ordering (compare sorts in Python); `5` vs
+`5.0` (compare normalizes numbers; the audit loader converts integral floats so
+the stored `determinant_value` text is identical on both engines).
+
+### 8b — Factory and Postgres build
+
+`src/db.py` reads `TARIFF_DB_URL` (else `TARIFF_DB_PATH`, else the SQLite file)
+and returns a plain `sqlite3` connection or a thin Postgres wrapper. The
+pipeline is the migration tool: an empty Postgres was built from the manifest.
+`run_pipeline.py --database` accepts a path or a `postgresql://` URL, and
+`compare_databases.py` reads either. `parse_schedule.py` gained an optional
+`--pdf` argument (default unchanged) so uploads can reach it.
+
+Evidence: Postgres fresh build compared EQUAL to the frozen SQLite under the 7d
+exclusions; the second pipeline run reported `no change` for every stage; the
+SQLite suite stayed green; the live file SHA-256 stayed `cc765bf3…c6eb`.
+
+### 8c — Id-independent snapshot hash
+
+`tariff_snapshot_hash` is computed over natural content: versions, components
+and rules with surrogate ids removed and each row's version identified by
+`schedule_code#version`, sorted canonically. Two independent Postgres fresh
+builds compare EQUAL with `compare_databases.py --strict` (no id-based
+exclusions, audit hashes included). The frozen SQLite artifact keeps its
+old-style hashes as history; comparison against it still passes under the
+legacy exclusion (now legacy-only). Consequence: auditing a bill on the frozen
+SQLite records one new run under the new formula.
+
+### 8d/8e — API and page
+
+Endpoints: `GET /health`, `/tariff-versions[/{id}]`, `/accounts`, `/bills[/{id}]`,
+`/bills/{id}/audit`; actions `POST /bills/{id}/audit`,
+`/tariff-versions/{id}/activate`, `/uploads/bill`, `/uploads/tariff`.
+Refusals (non-PDF, unreadable PDF, gate failures) are 4xx with
+`{message, failures[]}`. Tariff upload parses with the existing parsers using
+their fixed semantics (schedules are stamped Amendment 12, version 12) and
+leaves a validated draft; activation is a separate call. Evidence: the New Kent
+EAP uploaded to a scratch database through the API returned
+`loaded`, 31 bills; pilot verdicts read through the API equal the stored rows
+(test); `/docs` returns 200; in a browser, bill #29 rendered its 32 verdict
+rows with $7.59 and $12.21 matching.
+
+### 8f — Docker
+
+`Dockerfile` (python:3.9-slim) and `docker-compose.yml` (`api`, `postgres`,
+named volumes `pgdata`/`uploads`/`logs`, `data/raw` mounted read-only, both
+ports published on 127.0.0.1 only); `.env` is uncommitted, `.env.example`
+documents it. From a clean `down -v` state the stack came up healthy, the
+pipeline ran in-container (all stages, content hash `522499b1…`, identical to
+the host-side builds), a second run was a no-op, and `down`/`up` preserved the
+data.
+
+### 8g — CI
+
+`.github/workflows/ci.yml`: compile-check, build image, boot compose, poll
+`/health`. Not run by the test suite (E4). Green status and the red-X
+check on a throwaway branch need a push and are performed by the repository
+owner.
+
+Suite after Phase 8: 216 passed, local-only.
+

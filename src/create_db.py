@@ -228,6 +228,28 @@ CREATE TABLE IF NOT EXISTS schedule_review_decisions (
 );
 """)
 
+# --- parse_review_items: parse results a human must look at (B9) ---
+# Additive: CREATE TABLE IF NOT EXISTS upgrades existing databases in place. A resolution
+# records that a human looked; it never edits the component or rule it points at.
+cur.execute("""
+CREATE TABLE IF NOT EXISTS parse_review_items (
+    id INTEGER PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    schedule_code TEXT,
+    field TEXT NOT NULL,
+    stored_value TEXT,
+    signal TEXT NOT NULL,
+    detail TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+    reviewer TEXT,
+    resolution_note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT,
+    UNIQUE (source_kind, source_ref, field, signal)
+);
+""")
+
 conn.commit()  # commit() SAVES all changes into the file; without it, everything above is thrown away when you close
 conn.close()  # close() ends the connection, freeing it up
 print(f"Database created: {db.describe(DB_TARGET)}")  # print() shows text on screen; confirms the script finished

@@ -33,6 +33,7 @@ try:
     from src.ingest_usage_history import ingest_usage_pdf
     from src.line_validation import BillNotFound, ValidationRefused, validate_bill_lines
     from src.lookback import AccountNotFound, LookbackError, account_lookback
+    from src.parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
     from src.parse_rider import parse_rider
     from src.schedule_comparison import (
         ComparisonRefused,
@@ -62,6 +63,7 @@ except ImportError:
     from ingest_usage_history import ingest_usage_pdf
     from line_validation import BillNotFound, ValidationRefused, validate_bill_lines
     from lookback import AccountNotFound, LookbackError, account_lookback
+    from parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
     from parse_rider import parse_rider
     from schedule_comparison import (
         ComparisonRefused,
@@ -322,6 +324,36 @@ def get_schedule_comparison(bill_id: int):
     finally:
         conn.close()
     return Response(content=markdown, media_type="text/markdown")
+
+
+class ResolveBody(BaseModel):
+    reviewer: str
+    note: str
+
+
+@app.get("/parse-review")
+def get_parse_review(status: Optional[str] = None):
+    conn = db.connect(target(), readonly=True)
+    try:
+        return _plain(list_items(conn, status))
+    except ParseReviewError as error:
+        refuse(422, "The parse-review query was refused.", [str(error)])
+    except db.Error as error:
+        refuse(422, "The parse-review queue is unavailable.",
+               [f"{error}; run src/create_db.py to add the table."])
+    finally:
+        conn.close()
+
+
+@app.post("/parse-review/{item_id}/resolve")
+def post_parse_review_resolve(item_id: int, body: ResolveBody):
+    try:
+        with db.connect(target()) as conn:
+            return _plain(resolve_item(conn, item_id, body.reviewer, body.note))
+    except ItemNotFound as error:
+        refuse(404, str(error))
+    except ParseReviewError as error:
+        refuse(422, "The resolution was refused.", [str(error)])
 
 
 # ---------------------------------------------------------------- actions

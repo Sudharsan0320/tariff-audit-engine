@@ -987,3 +987,69 @@ and "Virginia Electric & Power Co (North Carolina)" (243 rates, dated mostly
 2012–2016, named like "GS-1" and "Residential Schedule 1"). Against the 41 active
 versions: agree 0, disagree 0, unmatched_ours 35, unmatched_theirs 243 — no URDB
 rate name corresponds to a VEPGA schedule, as expected from the caveat above.
+
+## Stage 8 — B9 + B15: parse-review queue and parser contract
+
+### B9 — parse-review queue
+
+Shaky parse results reach a human instead of being guessed or silently trusted. The
+table `parse_review_items` (additive `CREATE TABLE IF NOT EXISTS` in `src/create_db.py`,
+which upgrades existing databases in place) holds one row per hit: source kind and
+reference, schedule code, field, stored value, signal, detail, status (`open` /
+`resolved`), reviewer, resolution note, timestamps. A hit is unique on
+(source_kind, source_ref, field, signal).
+
+`src/parse_review.py::scan_for_review(conn)` queues hits from four explicit data
+patterns only; nothing is inferred:
+
+| Signal | Pattern |
+|---|---|
+| `verify_marker` | a stored rule text, or a component text field, containing the word "verify" or "garbled" (the Schedule C `$3.01/kW` standby rule, which ends `[garbled — verify]`, is item #1) |
+| `unevaluable_formula` | a component with a formula, where the billing engine's own `evaluate_component` reports it has no evaluator (the signal vanishes if an evaluator is ever added) |
+| `draft_missing_citation` | a component of a `draft` version without `source_page` >= 1 and a non-blank `source_cell` |
+| `zero_rate_unexpected` | a component with rate 0 whose type does not contain a `NON_ORDINARY_TOKENS` word (credit / adjustment / payment, the same list `validate_draft` uses) |
+
+Scanning is idempotent: a re-scan creates no duplicates and never reopens a resolved item.
+`resolve_item(conn, id, reviewer, note)` requires a reviewer and a note saying what
+happens next; it marks the item resolved and **never edits the component or rule**.
+Resolution records that a human looked; fixes flow through the parsers and a re-run, and
+the next scan reflects the corrected data. API: `GET /parse-review[?status=open|resolved]`
+and `POST /parse-review/{id}/resolve` (404 unknown item; 422 with a `failures` list for a
+blank reviewer/note, an already-resolved item, or an unavailable queue table).
+`python src/parse_review.py --scan` runs the scan from the CLI.
+
+Signals are heuristics over stored data: `zero_rate_unexpected` can flag a legitimately
+zero rate, and that is what the human resolution records. On the live data the scan queues
+15 items: 1 `verify_marker` (Schedule C rule 63) and 14 `zero_rate_unexpected` (Schedule 132
+`es_contract_demand_charge` and the 13 Rider PIPP-CM components); no formula components and
+no drafts exist, so those two signals queue nothing.
+
+### B15 — the parser contract
+
+`src/parser_contract.py::check_parser_contract(parse_fn, sample_source, conn_factory)` runs a
+candidate adapter against scratch databases and returns the list of contract failures
+(empty = conforming). An adapter is `parse_fn(source, target)`; `conn_factory()` returns the
+target of a fresh, empty, schema-initialised scratch database on each call
+(`sqlite_scratch_factory(dir)` builds them with `create_db.py`). The five clauses:
+
+1. **(i)** it writes only `draft` versions, and at least one from the valid sample;
+2. **(ii)** every component it writes carries a citation (page >= 1 and a cell);
+3. **(iii)** its drafts pass `validate_drafts` — refusals are returned, not hidden;
+4. **(iv)** running it twice changes nothing (full table snapshots compared);
+5. **(v)** given a foreign, unreadable source it raises an ordinary exception (a crash such as
+   `TypeError` does not count as a refusal) and writes nothing.
+
+Failures are strings tagged with their clause. A sample that makes the adapter raise is
+reported as a single `sample:` failure.
+
+### What the second adapter proved
+
+`src/csv_rate_parser.py` reads a CSV rate sheet (schedule_code, version, effective_from,
+component_type, unit, rate, source_page, source_cell; state and utility are parameters) and
+writes draft versions through the same tables and the same draft-only, citation-carrying,
+idempotent pattern as the PDF parsers. It validates the whole sheet before writing, so a
+refused sheet writes nothing. The contract passes for it **and** for the existing PDF rider
+path (`parse_rider`, unchanged, through a thin `rider_adapter`), and a deliberately
+non-conforming stub (writes an `active` version, no citations, not idempotent) fails with
+clauses (i), (ii), (iv) and (v). The contract is therefore not PDF-shaped: it constrains
+what lands in the database, not how the source is read.

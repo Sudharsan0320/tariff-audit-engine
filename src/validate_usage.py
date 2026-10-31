@@ -1,11 +1,12 @@
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+import os
 from pathlib import Path
 import sqlite3
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = ROOT / "data" / "tariffs.db"
+DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
 REQUIRED_FIELDS = (
     "account_number",
     "account_name",

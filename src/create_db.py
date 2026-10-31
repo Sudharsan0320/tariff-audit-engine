@@ -1,6 +1,8 @@
 import sqlite3  # import = bring in a toolbox; sqlite3 = Python's built-in toolbox for talking to SQLite databases
 
-conn = sqlite3.connect("data/tariffs.db")  # connect() opens the database file; conn = the connection object (your live link to the file). If the file doesn't exist, it gets created.
+import os
+DB_PATH = os.environ.get("TARIFF_DB_PATH") or "data/tariffs.db"  # TARIFF_DB_PATH overrides the location (pipeline use)
+conn = sqlite3.connect(DB_PATH)  # connect() opens the database file; conn = the connection object (your live link to the file). If the file doesn't exist, it gets created.
 cur = conn.cursor()  # cursor() makes a cursor; cur = your messenger that carries SQL commands to the database and brings results back
 
 # --- tariff_versions: one row per tariff version (a dated set of rates) ---
@@ -195,4 +197,4 @@ CREATE TABLE IF NOT EXISTS audit_lines (
 
 conn.commit()  # commit() SAVES all changes into the file; without it, everything above is thrown away when you close
 conn.close()  # close() ends the connection, freeing it up
-print("Database created: data/tariffs.db")  # print() shows text on screen; confirms the script finished
+print(f"Database created: {DB_PATH}")  # print() shows text on screen; confirms the script finished

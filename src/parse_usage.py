@@ -14,6 +14,17 @@ else:
 
 
 LEFT_COLUMN_RIGHT_EDGE = 270
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def canonical_source_path(path):
+    """Store project-relative POSIX paths so the database is machine-independent."""
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
+
 MONTHS = {
     "JAN": 1,
     "FEB": 2,
@@ -433,7 +444,7 @@ def parse_usage_pdf(pdf_path):
             section["history_year_status"] = "complete"
     for bill in bills:
         bill["account_number"] = account_number
-        bill["source_file"] = str(path)
+        bill["source_file"] = canonical_source_path(path)
         bill["history_year_status"] = next(
             section["history_year_status"]
             for section in sections
@@ -451,7 +462,7 @@ def parse_usage_pdf(pdf_path):
             for section in sections
         ],
         "bills": bills,
-        "source_file": str(path),
+        "source_file": canonical_source_path(path),
     }
 
 

@@ -1,7 +1,9 @@
 import argparse
+import os
 import pdfplumber
 import re
 import sqlite3
+import sys
 
 
 parser = argparse.ArgumentParser(description="Parse a Virginia tariff schedule.")
@@ -9,7 +11,7 @@ parser.add_argument("schedule_code", type=str, help="Schedule code to parse")
 args = parser.parse_args()
 
 pdf_path = "data/raw/VEPGA-Amendment-12-Effective-July-1-2025.pdf"
-conn = sqlite3.connect("data/tariffs.db")
+conn = sqlite3.connect(os.environ.get("TARIFF_DB_PATH") or "data/tariffs.db")
 
 matching_pages = []
 schedule_header = f"SCHEDULE {args.schedule_code}"
@@ -28,6 +30,10 @@ with pdfplumber.open(pdf_path) as pdf:
 print(f"{len(matching_pages)} pages found")
 print("Pages:", ", ".join(str(page_index + 1) for page_index, _ in matching_pages))
 
+if not matching_pages:
+    print(f"ERROR: no pages found for schedule {args.schedule_code}; nothing written", file=sys.stderr)
+    sys.exit(1)
+
 cur = conn.cursor()
 version_values = (
     "VA",
@@ -39,15 +45,21 @@ version_values = (
 )
 cur.execute(
     """
-    SELECT id FROM tariff_versions
+    SELECT id, status FROM tariff_versions
     WHERE state = ? AND utility = ? AND schedule_code = ?
-      AND version = ? AND effective_from = ? AND status = ?
+      AND version = ? AND effective_from = ?
     ORDER BY id DESC
     LIMIT 1
     """,
-    version_values,
+    version_values[:5],
 )
 existing_version = cur.fetchone()
+if existing_version is not None and existing_version[1] != "draft":
+    print(
+        f"already {existing_version[1]}, skipped: schedule {args.schedule_code} "
+        f"version {existing_version[0]}"
+    )
+    sys.exit(0)
 if existing_version is None:
     cur.execute(
         """

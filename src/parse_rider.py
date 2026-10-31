@@ -1,4 +1,5 @@
 import argparse
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -8,7 +9,7 @@ import pdfplumber
 
 ROOT = Path(__file__).resolve().parents[1]
 PDF_PATH = ROOT / "data" / "raw" / "VEPGA-Amendment-12-Effective-July-1-2025.pdf"
-DATABASE_PATH = ROOT / "data" / "tariffs.db"
+DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
 EFFECTIVE_FROM = "2025-07-01"
 RIDER_VERSION = 12
 UTILITY = "Virginia Electric and Power Company"

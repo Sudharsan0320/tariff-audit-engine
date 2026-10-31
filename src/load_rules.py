@@ -1,12 +1,13 @@
 import argparse
 from collections import Counter
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = ROOT / "data" / "tariffs.db"
+DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
 INVENTORY_PATH = ROOT / "docs" / "tariff-rules-inventory.json"
 EFFECTIVE_FROM = "2025-07-01"
 VERSION = 12

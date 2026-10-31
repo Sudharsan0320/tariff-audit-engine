@@ -1,9 +1,13 @@
 import math
+import os
 import sqlite3
 from pathlib import Path
 
 
-DATABASE_PATH = Path(__file__).resolve().parents[1] / "data" / "tariffs.db"
+DATABASE_PATH = Path(
+    os.environ.get("TARIFF_DB_PATH")
+    or Path(__file__).resolve().parents[1] / "data" / "tariffs.db"
+)
 VALID_UNITS = {
     "usd_per_kwh",
     "usd_per_kw",

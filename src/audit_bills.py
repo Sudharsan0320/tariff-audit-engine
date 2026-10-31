@@ -4,6 +4,7 @@ import argparse
 from decimal import Decimal
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 
@@ -32,7 +33,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = ROOT / "data" / "tariffs.db"
+DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
 DEFAULT_MAPPING_PATH = ROOT / "docs" / "bill-label-mapping.json"
 DIRECT = "direct"
 ZERO_EXPECTED = "zero_expected"

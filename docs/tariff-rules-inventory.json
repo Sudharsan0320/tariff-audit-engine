@@ -1,6 +1,9 @@
 {
   "title": "VEPGA Amendment 12 tariff rules inventory",
   "effective_from": "2025-07-01",
+  "cross_reference_schedules": {
+    "RG-CM": "Referenced by the Amendment 12 plan text but given no schedule sheet; version row exists only to carry its rule."
+  },
   "source": "User-provided RULES inventory (Pasted text #1.txt), supplemented only for deferred topics in the approved 3e plan using the cited Amendment 12 PDF pages.",
   "inventory_rule_counts": {
     "100": 4,

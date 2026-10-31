@@ -1,3 +1,4 @@
+import os
 import pdfplumber, re, sqlite3  # three toolboxes: pdfplumber reads PDFs, re does pattern-matching (regex), sqlite3 talks to the database
 
 with pdfplumber.open("data/raw/rider-gen.pdf") as pdf:  # open the PDF as 'pdf'; with auto-closes it when the block ends
@@ -8,7 +9,7 @@ with pdfplumber.open("data/raw/rider-gen.pdf") as pdf:  # open the PDF as 'pdf';
     print(f"Tables :{len(tables)}")  # how many tables were found
     print(tables[0])  # first table: a list of rows, each row a list of cell texts
 
-conn = sqlite3.connect("data/tariffs.db")  # open the database file
+conn = sqlite3.connect(os.environ.get("TARIFF_DB_PATH") or "data/tariffs.db")  # open the database file
 cur = conn.cursor()  # cursor: the messenger that carries SQL to the database
 version_values = (  # a tuple (an ordered list you can't change after making) holding the six values that identify this version...
     "VA",  # ...the state
@@ -25,15 +26,18 @@ version_values = (  # a tuple (an ordered list you can't change after making) ho
 # The SQL text and its values travel separately: this is called a parameterized query
 cur.execute(
     """
-    SELECT id FROM tariff_versions
+    SELECT id, status FROM tariff_versions
     WHERE state = ? AND utility = ? AND schedule_code = ?
-      AND version = ? AND effective_from = ? AND status = ?
+      AND version = ? AND effective_from = ?
     ORDER BY id DESC
     LIMIT 1
     """,
-    version_values,
+    version_values[:5],
 )
 existing_version = cur.fetchone()  # take the first result row, or None if the SELECT found nothing (fetchone = one row; fetchall = all rows)
+if existing_version is not None and existing_version[1] != "draft":
+    print(f"already {existing_version[1]}, skipped: RIDER GEN version {existing_version[0]}")
+    raise SystemExit(0)
 if existing_version is None:  # the version is NOT in the database yet...
     # --- The SQL below inserts it. Line by line: ---
     # INSERT INTO tariff_versions(...) = add a row to tariff_versions, naming the six columns (names only: no types, no quotes)

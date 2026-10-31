@@ -332,7 +332,7 @@ def _base_schedules(conn, identity):
         """
         SELECT v.schedule_code, MIN(v.id) AS first_id
         FROM tariff_versions v
-        WHERE v.state = ? AND v.utility = ? AND v.status = 'active'
+        WHERE v.state = ? AND v.utility = ? AND v.status IN ('active', 'superseded')
           AND NOT EXISTS (
               SELECT 1 FROM tariff_versions v2
               JOIN tariff_components c ON c.tariff_version_id = v2.id

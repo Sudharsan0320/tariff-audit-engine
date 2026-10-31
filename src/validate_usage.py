@@ -109,7 +109,7 @@ def _tariff_windows(conn, schedule_code):
         """
         SELECT effective_from, effective_to
         FROM tariff_versions
-        WHERE schedule_code = ? AND status = 'active'
+        WHERE schedule_code = ? AND status IN ('active', 'superseded')
         """,
         (schedule_code,),
     ).fetchall()

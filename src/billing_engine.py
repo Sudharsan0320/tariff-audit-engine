@@ -58,7 +58,7 @@ def resolve_version(conn, schedule_code, bill_date, state=None, utility=None):
         SELECT id, state, utility, schedule_code, version,
                effective_from, effective_to, status
         FROM tariff_versions
-        WHERE schedule_code = ? AND status = 'active'
+        WHERE schedule_code = ? AND status IN ('active', 'superseded')
     """
     parameters = [schedule_code]
     if state is not None:

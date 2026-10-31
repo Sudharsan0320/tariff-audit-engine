@@ -886,11 +886,12 @@ strings) and `GET /tariff-versions/{new_id}/alert?against={old_id}&bill={id}`
 list for a refused pair or an uncomputable alert. `POST
 /tariff-versions/{id}/activate` now also returns `alert_path` and `warnings`.
 
-**Known pre-existing limit (not changed here).** `activate_version` counts every
-row with `status = 'active'` for a schedule, and a superseded version keeps that
-status (only `effective_to` is set). Activating a third version of one schedule
-is therefore refused ("Found 2 active versions"). The first real pair works;
-the lifecycle needs a `superseded` status before a third amendment.
+**Former limit — fixed in Stage 5.5.** `activate_version` used to leave a
+replaced version at `status = 'active'`, so a third version of one schedule was
+refused ("Found 2 active versions"). Activation now sets the predecessor's
+`effective_to` and `status = 'superseded'` in the same transaction as the new
+version's activation, so exactly one row per schedule is `active`. See "Version
+lifecycle" below.
 
 ## Stage 6 — B5 + B6: back-bill lookback and line-item validation
 
@@ -925,3 +926,16 @@ fixed-monthly components; other units are not judged. Refusals: no audit run
 (422), unknown bill (404), a mapped charge missing from the run (stale run), and
 a checked-in mapping version that differs from the run's. API:
 `GET /bills/{bill_id}/line-validation`.
+
+## Stage 5.5 — version lifecycle
+
+`tariff_versions.status` is `draft` → `active` → `superseded`. `active` is the
+current version; `superseded` is one replaced by a later activation (its
+`effective_to` is the successor's `effective_from`). Date-based resolution
+(`resolve_version`, `resolve_period_version`, `validate_usage._tariff_windows`,
+and the schedule list in `schedule_review._base_schedules`) reads
+`status IN ('active', 'superseded')` and selects by effective range, so a past
+bill still resolves to the version in force on its date. Activation checks
+("exactly one active version") count only `active` rows. No stored row changes:
+live data has one version per schedule, all `active` (41), and none is
+superseded until a second amendment is activated.

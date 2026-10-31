@@ -15,7 +15,8 @@ cur = conn.cursor()  # cursor() makes a cursor; cur = your messenger that carrie
 #   state/utility/schedule_code/version = TEXT or INTEGER columns; NOT NULL = must always have a value
 #   effective_from DATE NOT NULL = the date this version starts applying
 #   effective_to DATE (no NOT NULL) = the date it stops; allowed to stay empty (NULL) for the current version
-#   status TEXT NOT NULL = 'draft' or 'active', the pipeline stage
+#   status TEXT NOT NULL = 'draft', 'active' (current) or 'superseded' (replaced by a later
+#   activation; still resolved by its effective range), the pipeline stage
 # CREATE TABLE makes the table; IF NOT EXISTS = skip if it's already there, so re-running is safe
 cur.execute("""
 CREATE TABLE IF NOT EXISTS tariff_versions (

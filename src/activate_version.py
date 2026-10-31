@@ -55,7 +55,7 @@ def activate_version(conn, version_id):
                     f"version {active_id} effective_from {active_effective_from}."
                 )
             conn.execute(
-                "UPDATE tariff_versions SET effective_to = ? WHERE id = ?",
+                "UPDATE tariff_versions SET effective_to = ?, status = 'superseded' WHERE id = ?",
                 (effective_from, active_id),
             )
 

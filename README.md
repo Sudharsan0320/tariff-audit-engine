@@ -99,6 +99,7 @@ python src/audit_bills.py
   eligibility is not established, so no cheaper-rate flag is raised. A
   separate price-anomaly check is unavailable because stored bill lines do
   not include printed unit rates.
+- Phase 6: testing — complete. Suite grew 57 → 191 tests with 90% coverage and hand-computed money values; golden tests freeze the 41 versions' counts, 112 rules, 31 bills / 894 charges, and the pilot totals; deliberate mutations are caught. Tests stay local-only.
 - Phase 7: complete. One command, `python src/run_pipeline.py`, builds the
   whole database from the checked-in [`pipeline-manifest.json`](docs/pipeline-manifest.json)
   (schema, parse, rules, validate, activate, ingest, enrich, audit), stops at

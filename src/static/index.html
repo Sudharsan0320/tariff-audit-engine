@@ -2,108 +2,532 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tariff Audit Engine</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-  h1 { margin-bottom: 0; }
-  .sub { color: #666; margin-top: .2rem; }
-  section { border: 1px solid #ccc; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
-  label { display: block; margin: .4rem 0; }
-  button { padding: .4rem .9rem; }
-  .ok { color: #0a6b2d; } .err { color: #a11; }
-  pre { background: #f5f5f5; padding: .6rem; overflow: auto; }
-  table { border-collapse: collapse; width: 100%; margin-top: .6rem; }
-  th, td { border: 1px solid #ddd; padding: .3rem .5rem; text-align: left; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.bad td { background: #fdecec; }
+:root {
+  --bg: #07080b; --panel: #14161c; --card: #1b1e26; --card-hi: #262a35;
+  --text: #f2f3f5; --dim: #9aa0ad; --line: #2a2e39; --accent: #5aa9ff;
+  --green: #2fd06b; --red: #ff5a52; --amber: #ffb340; --grey: #6b7280;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif; }
+body { min-height: 100vh; }
+a { color: var(--accent); }
+nav.top { position: sticky; top: 0; z-index: 10; display: flex; gap: 8px; align-items: center;
+  padding: 14px 48px; background: linear-gradient(#07080bf2, #07080bd9); backdrop-filter: blur(12px); }
+nav.top .brand { font-weight: 700; letter-spacing: .02em; margin-right: 24px; }
+.tab { padding: 8px 20px; border-radius: 999px; color: var(--dim); cursor: pointer; font-size: 17px; outline: none;
+  transition: transform .15s, background .15s, color .15s; }
+.tab.on { color: var(--text); background: #ffffff14; }
+.tab:focus { background: #fff; color: #000; transform: scale(1.1); }
+main { padding: 8px 48px 80px; max-width: 1500px; margin: 0 auto; }
+.hint { color: var(--dim); font-size: 13px; margin: 6px 0 0; }
+h1 { font-size: 44px; margin: 8px 0 4px; letter-spacing: -.01em; }
+h2.shelf-title { font-size: 22px; margin: 34px 0 6px; font-weight: 600; }
+.hero { padding: 40px 44px; border-radius: 28px; margin: 12px 0 8px;
+  background: radial-gradient(900px 300px at 10% 0%, #25406b 0%, #14161c 60%, #0d0f14 100%); }
+.hero .big { font-size: 56px; font-weight: 700; letter-spacing: -.02em; }
+.hero .stats { display: flex; gap: 48px; margin-top: 18px; flex-wrap: wrap; }
+.stat b { display: block; font-size: 34px; }
+.stat span { color: var(--dim); font-size: 14px; }
+.dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; background: var(--grey); }
+.dot.ok { background: var(--green); box-shadow: 0 0 12px var(--green); } .dot.bad { background: var(--red); }
+.shelf { display: flex; gap: 22px; overflow-x: auto; padding: 22px 6px 30px; scrollbar-width: none; }
+.shelf::-webkit-scrollbar { display: none; }
+.grid { display: flex; flex-wrap: wrap; gap: 22px; padding: 22px 6px 30px; }
+.card { flex: 0 0 auto; width: 270px; min-height: 150px; padding: 20px; border-radius: 20px; background: var(--card);
+  cursor: pointer; outline: none; transition: transform .18s ease, background .18s, box-shadow .18s; position: relative; }
+.card:focus, .card:hover { transform: scale(1.1); background: var(--card-hi); z-index: 3;
+  box-shadow: 0 18px 40px #000a, 0 0 0 3px #ffffffcc; }
+.card .k { color: var(--dim); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+.card .t { font-size: 26px; font-weight: 650; margin: 6px 0; }
+.card .s { color: var(--dim); font-size: 15px; line-height: 1.4; }
+.pill { display: inline-block; padding: 3px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
+.pill.green { background: #2fd06b26; color: var(--green); } .pill.red { background: #ff5a5226; color: var(--red); }
+.pill.grey { background: #6b728033; color: #c3c7d0; } .pill.amber { background: #ffb34026; color: var(--amber); }
+.pill.blue { background: #5aa9ff26; color: var(--accent); }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.panel { background: var(--panel); border-radius: 22px; padding: 26px 28px; margin: 22px 0; }
+.panel h2 { margin: 0 0 4px; font-size: 26px; }
+table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 15px; }
+th { text-align: left; color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr[data-f] { outline: none; } tr[data-f]:focus td { background: #ffffff1c; }
+tr[data-f]:focus td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.btn { font: inherit; font-size: 15px; font-weight: 600; padding: 9px 20px; border-radius: 999px; border: 0; cursor: pointer;
+  background: #ffffff1f; color: var(--text); outline: none; transition: transform .15s, background .15s; }
+.btn:focus, .btn:hover { background: #fff; color: #000; transform: scale(1.07); }
+.btn.go { background: var(--accent); color: #00142b; } .btn.go:focus, .btn.go:hover { background: #fff; }
+.btn[disabled] { opacity: .4; cursor: default; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+input, select { font: inherit; font-size: 15px; padding: 9px 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: #0d0f14; color: var(--text); outline: none; }
+input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #5aa9ff55; }
+.alert { background: #ff5a5217; border: 1px solid #ff5a5266; border-radius: 16px; padding: 14px 18px; margin: 12px 0; }
+.alert b { color: var(--red); } .alert ul { margin: 8px 0 0; padding-left: 22px; }
+.okcard { background: #2fd06b14; border: 1px solid #2fd06b55; border-radius: 16px; padding: 14px 18px; margin: 12px 0; }
+.okcard b { color: var(--green); }
+.drop { width: 420px; min-height: 230px; border: 2px dashed #ffffff44; background: var(--card); }
+.drop.over { border-color: var(--accent); background: #5aa9ff14; }
+.md { line-height: 1.55; } .md h1 { font-size: 28px; margin: 0 0 8px; } .md h2 { font-size: 20px; margin: 22px 0 4px; }
+.md h3 { font-size: 17px; } .md code { background: #ffffff14; padding: 1px 6px; border-radius: 6px; font-size: 13px; }
+.md ul { padding-left: 22px; } .md p { margin: 8px 0; }
+.muted { color: var(--dim); } .mono { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.neg { color: var(--red); } details summary { cursor: pointer; outline: none; color: var(--accent); }
+details summary:focus { text-decoration: underline; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; font-size: 14px; margin-top: 8px; }
+.kv dt { color: var(--dim); } .kv dd { margin: 0; }
+@media print {
+  html, body { background: #fff !important; color: #000 !important; }
+  nav.top, .noprint, .hint { display: none !important; }
+  main { padding: 0; max-width: none; }
+  body.has-print .printable:not(.pr) { display: none !important; }
+  .panel { background: #fff !important; padding: 0; margin: 0; border-radius: 0; }
+  .md, .md * { color: #000 !important; }
+  table { font-size: 11px; page-break-inside: auto; } tr { page-break-inside: avoid; }
+  th, td { border-bottom: 1px solid #999 !important; color: #000 !important; }
+  .pill { border: 1px solid #555; background: #fff !important; color: #000 !important; }
+}
 </style>
 </head>
 <body>
-<h1>Tariff Audit Engine</h1>
-<p class="sub">Local single-user tool &middot; <a href="/docs">API explorer</a></p>
-
-<section>
-  <h2>Upload a tariff PDF</h2>
-  <form id="tariff-form">
-    <label>Kind
-      <select name="kind"><option>schedule</option><option>rider</option></select></label>
-    <label>Code (e.g. 110 or T-CM) <input name="code" required></label>
-    <label>PDF <input type="file" name="file" accept="application/pdf" required></label>
-    <button>Upload tariff</button>
-  </form>
-  <div id="tariff-result"></div>
-</section>
-
-<section>
-  <h2>Upload a bill PDF (Dominion EAP history)</h2>
-  <form id="bill-form">
-    <label>PDF <input type="file" name="file" accept="application/pdf" required></label>
-    <button>Upload bill history</button>
-  </form>
-  <div id="bill-result"></div>
-</section>
-
-<section>
-  <h2>Bill audit</h2>
-  <label>Bill <select id="bill-picker"></select></label>
-  <button id="audit-run">Run audit</button>
-  <div id="audit-result"></div>
-</section>
+<nav class="top" id="nav">
+  <span class="brand">Tariff Audit Engine</span>
+  <a class="tab" data-f data-route="home" tabindex="0">Home</a>
+  <a class="tab" data-f data-route="tariffs">Tariffs</a>
+  <a class="tab" data-f data-route="bills">Bills</a>
+  <a class="tab" data-f data-route="audits">Audits</a>
+  <a class="tab" data-f data-route="upload">Upload</a>
+</nav>
+<main id="app"></main>
 
 <script>
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+"use strict";
+const $app = document.getElementById("app");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-function show(el, ok, body) {
-  el.innerHTML = `<p class="${ok ? "ok" : "err"}">${ok ? "Accepted" : "Refused"}: ${esc(body.message || body.status || "")}</p>`
-    + (body.failures && body.failures.length ? `<ul>${body.failures.map(f => `<li>${esc(f)}</li>`).join("")}</ul>` : "")
-    + `<pre>${esc(JSON.stringify(body, null, 2))}</pre>`;
+/* ---------- formatting: money is text, never float arithmetic ---------- */
+function money(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  let s = String(v);
+  if (/e/i.test(s)) return s;
+  if (!/^-?\d+(\.\d*)?$/.test(s)) return esc(s);
+  if (!s.includes(".")) return s + ".00";
+  const dec = s.split(".")[1].length;
+  return dec < 2 ? s + "0".repeat(2 - dec) : s;
+}
+const moneyHtml = v => { const m = money(v); return m.startsWith("-") ? `<span class="neg">${m}</span>` : m; };
+/* rates: stored floats carry binary noise; quantize to 6 places, trim zeros (display only) */
+function rate(v) {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "string") return esc(v);
+  let s = v.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return s === "-0" ? "0" : s;
+}
+const val = v => (v === null || v === undefined || v === "") ? "—" : esc(v);
+
+function pill(text, kind) { return `<span class="pill ${kind}">${esc(text)}</span>`; }
+function verdictPill(l) {
+  const v = l.verdict;
+  if (v === "MATCH" && l.disposition === "zero_expected") return pill("ZERO-EXPECTED", "grey");
+  if (v === "MATCH") return pill(v, "green");
+  if (v === "MISMATCH" || v === "MISSING") return pill(v, "red");
+  if (v === "OUT-OF-SCOPE") return pill(v, "grey");
+  return pill(v || "?", "amber");
 }
 
-async function submit(form, url, el) {
-  const response = await fetch(url, { method: "POST", body: new FormData(form) });
-  const body = await response.json();
-  show(el, response.ok, response.ok ? body : (body.detail || body));
-  if (response.ok) loadBills();
+/* ---------- API ---------- */
+class ApiError extends Error { constructor(status, body) { super(body.message || "Request failed"); this.status = status; this.body = body; } }
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const type = res.headers.get("content-type") || "";
+  const body = type.includes("json") ? await res.json() : await res.text();
+  if (!res.ok) {
+    const d = (body && body.detail !== undefined) ? body.detail : body;
+    throw new ApiError(res.status, typeof d === "string" ? { message: d, failures: [] } : (d || { message: "Error", failures: [] }));
+  }
+  return body;
+}
+const post = (path, json) => api(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(json) });
+
+function alertCard(err, title) {
+  let b = err instanceof ApiError ? err.body : { message: String(err && err.message || err), failures: [] };
+  if (Array.isArray(b)) b = { message: "Invalid request", failures: b.map(x => x.msg || JSON.stringify(x)) };
+  const fails = (b.failures || []).map(f => `<li>${esc(f)}</li>`).join("");
+  const status = err instanceof ApiError ? ` (HTTP ${err.status})` : "";
+  return `<div class="alert" role="alert"><b>${esc(title || "Refused")}${status}</b> ${esc(b.message || "")}${fails ? `<ul>${fails}</ul>` : ""}</div>`;
+}
+const okCard = (title, html) => `<div class="okcard"><b>${esc(title)}</b> ${html || ""}</div>`;
+
+/* ---------- minimal Markdown ---------- */
+function inline(s) {
+  return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+function renderMd(src) {
+  const lines = src.replace(/\r/g, "").split("\n"); let out = "", i = 0;
+  const cells = l => l.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, "|"));
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*$/.test(l)) { i++; continue; }
+    let m;
+    if ((m = l.match(/^(#{1,4})\s+(.*)$/))) { out += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`; i++; continue; }
+    if (/^\s*\|/.test(l) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+      const head = cells(l), al = cells(lines[i + 1]).map(c => c.endsWith(":") ? "num" : "");
+      out += "<table><thead><tr>" + head.map((c, k) => `<th class="${al[k] || ""}">${inline(c)}</th>`).join("") + "</tr></thead><tbody>";
+      i += 2;
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        out += "<tr data-f>" + cells(lines[i]).map((c, k) => `<td class="${al[k] || ""}">${inline(c)}</td>`).join("") + "</tr>"; i++;
+      }
+      out += "</tbody></table>"; continue;
+    }
+    if (/^\s*[-*]\s+/.test(l)) {
+      out += "<ul>";
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { out += `<li>${inline(lines[i].replace(/^\s*[-*]\s+/, ""))}</li>`; i++; }
+      out += "</ul>"; continue;
+    }
+    let para = [];
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^(#{1,4}\s|\s*\||\s*[-*]\s)/.test(lines[i])) { para.push(lines[i]); i++; }
+    out += `<p>${inline(para.join(" "))}</p>`;
+  }
+  return `<div class="md">${out}</div>`;
 }
 
-document.getElementById("tariff-form").addEventListener("submit", e => {
-  e.preventDefault();
-  submit(e.target, "/uploads/tariff", document.getElementById("tariff-result"));
+/* ---------- printing ---------- */
+function printSection(id) {
+  const el = document.getElementById(id); if (!el) return;
+  el.classList.add("pr"); document.body.classList.add("has-print");
+  const done = () => { el.classList.remove("pr"); document.body.classList.remove("has-print"); window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done); window.print();
+}
+
+/* ---------- routing ---------- */
+let routeToken = 0;
+const parts = () => (location.hash.replace(/^#\/?/, "") || "home").split("/");
+function go(path) { location.hash = "#/" + path; }
+window.addEventListener("hashchange", render);
+
+function parentRoute() {
+  const p = parts();
+  if (p.length > 1) return p[0];
+  return p[0] === "home" ? null : "home";
+}
+
+async function render() {
+  const token = ++routeToken, p = parts();
+  document.querySelectorAll("nav .tab").forEach(t => t.classList.toggle("on", t.dataset.route === p[0]));
+  $app.innerHTML = `<p class="muted">Loading…</p>`;
+  let html;
+  try {
+    html = await ({ home: viewHome, tariffs: viewTariffs, bills: viewBills, audits: viewAudits, upload: viewUpload }[p[0]] || viewHome)(p, token);
+  } catch (e) { html = alertCard(e, "Could not load this view"); }
+  if (token !== routeToken) return;
+  $app.innerHTML = html;
+  window.scrollTo(0, 0);
+  if (afterRender) { const f = afterRender; afterRender = null; await f(token); }
+  if (token === routeToken) initFocus(true);
+}
+let afterRender = null;
+
+/* ---------- cards ---------- */
+const card = (route, kicker, title, sub, extra) =>
+  `<div class="card" data-f data-route="${esc(route)}" role="button"><div class="k">${esc(kicker)}</div><div class="t">${title}</div><div class="s">${sub}</div>${extra || ""}</div>`;
+const period = b => `${esc(b.bill_from)} → ${esc(b.bill_to)}`;
+const billCard = (route, b, extra) => card(route, `Bill ${b.id} · Schedule ${esc(b.schedule_code)}`, "$" + money(b.total_billed), period(b), extra);
+const verdictCounts = lines => {
+  const n = {}; lines.forEach(l => { const k = (l.verdict === "MATCH" && l.disposition === "zero_expected") ? "ZERO-EXPECTED" : l.verdict; n[k] = (n[k] || 0) + 1; });
+  return Object.entries(n).map(([k, c]) => pill(`${c} ${k}`, k === "MATCH" ? "green" : (k === "MISMATCH" || k === "MISSING") ? "red" : k === "ZERO-EXPECTED" || k === "OUT-OF-SCOPE" ? "grey" : "amber")).join("");
+};
+const latestRun = a => a.runs.length ? a.runs[a.runs.length - 1] : null;
+
+/* ---------- 1. Home ---------- */
+async function viewHome() {
+  const [health, versions, bills] = await Promise.all([
+    api("/health").catch(e => ({ status: "down", error: e })), api("/tariff-versions"), api("/bills")]);
+  const ok = health.status === "ok";
+  const recent = bills.slice().sort((a, b) => b.bill_from.localeCompare(a.bill_from) || b.id - a.id).slice(0, 10);
+  const audits = await Promise.all(recent.slice(0, 8).map(b => api(`/bills/${b.id}/audit`).then(a => [b, a]).catch(() => [b, null])));
+  const audited = audits.filter(([, a]) => a && latestRun(a));
+  return `
+  <section class="hero"><div class="big"><span class="dot ${ok ? "ok" : "bad"}"></span>Engine ${ok ? "online" : "unavailable"}</div>
+    <div class="muted" style="margin-top:6px">${ok ? esc(health.database) : "The API did not answer /health."}</div>
+    <div class="stats"><div class="stat"><b>${versions.length}</b><span>tariff versions</span></div>
+    <div class="stat"><b>${bills.length}</b><span>bills</span></div>
+    <div class="stat"><b>${audited.length}</b><span>recently audited</span></div></div></section>
+  <p class="hint">Arrow keys move focus · Enter opens · Esc goes back</p>
+  <h2 class="shelf-title">Recent bills</h2>
+  <div class="shelf">${recent.map(b => billCard("bills/" + b.id, b)).join("") || `<p class="muted">No bills stored.</p>`}</div>
+  <h2 class="shelf-title">Latest audit results</h2>
+  <div class="shelf">${audited.map(([b, a]) => { const r = latestRun(a), t = r.report.like_for_like_totals || {};
+      return card("audits/" + b.id, `Run ${r.id} · Bill ${b.id}`, "$" + money(t.billed), `Expected $${money(t.expected)} · Δ $${money(t.delta)}`,
+        `<div class="pills">${verdictCounts(r.lines)}</div>`); }).join("") || `<p class="muted">No audit runs yet.</p>`}</div>`;
+}
+
+/* ---------- 2. Tariffs ---------- */
+async function viewTariffs(p) {
+  if (p[1]) return viewVersion(p[1]);
+  const v = await api("/tariff-versions");
+  return `<h1>Tariffs</h1><p class="hint">Esc returns home.</p><div class="grid">${v.map(x =>
+    card("tariffs/" + x.id, `${esc(x.status)} · v${esc(x.version)}`, esc(x.schedule_code),
+      `${esc(x.effective_from)} → ${esc(x.effective_to || "open")}`, `<div class="pills">${pill(x.status, x.status === "active" ? "green" : "amber")}</div>`)).join("")}</div>`;
+}
+async function viewVersion(id) {
+  const v = await api("/tariff-versions/" + encodeURIComponent(id));
+  return `<h1>${esc(v.schedule_code)} <span class="muted">v${esc(v.version)}</span></h1>
+  <p class="muted">${esc(v.utility)} · ${esc(v.state)} · ${esc(v.effective_from)} → ${esc(v.effective_to || "open")} · ${pill(v.status, v.status === "active" ? "green" : "amber")}</p>
+  <div class="panel"><h2>Components <span class="muted">(${v.components.length})</span></h2>
+  <table><thead><tr><th>Type</th><th>Category</th><th class="num">Rate</th><th>Unit</th><th>Variant / class</th><th>Tier</th><th class="num">Page</th><th>Cell</th></tr></thead><tbody>
+  ${v.components.map(c => `<tr data-f><td>${esc(c.component_type)}</td><td>${val(c.billing_category)}</td>
+    <td class="num">${c.rate === null ? (c.formula ? `<span class="mono">${esc(c.formula)}</span>` : "—") : rate(c.rate)}</td><td>${val(c.unit)}</td>
+    <td>${[c.variant, c.billing_class, c.season].filter(Boolean).map(esc).join(" · ") || "—"}</td>
+    <td>${c.tier_min === null && c.tier_max === null ? "—" : `${val(c.tier_min)}–${val(c.tier_max)} ${esc(c.tier_unit || "")}`}</td>
+    <td class="num">${val(c.source_page)}</td><td class="mono">${val(c.source_cell)}</td></tr>`).join("")}</tbody></table></div>
+  <div class="panel"><h2>Rules <span class="muted">(${v.rules.length})</span></h2>
+  <table><thead><tr><th>Type</th><th>Text</th></tr></thead><tbody>
+  ${v.rules.map(r => `<tr data-f><td>${esc(r.rule_type)}</td><td>${esc(r.rule_text)}</td></tr>`).join("") || `<tr><td colspan="2" class="muted">No rules stored.</td></tr>`}</tbody></table></div>`;
+}
+
+/* ---------- 3. Bills ---------- */
+async function viewBills(p) {
+  if (p[1]) return viewBill(p[1]);
+  const [accts, bills] = await Promise.all([api("/accounts"), api("/bills")]);
+  const sorted = bills.slice().sort((a, b) => b.bill_from.localeCompare(a.bill_from) || b.id - a.id);
+  return `<h1>Bills</h1>${accts.map(a => `<p class="muted">${esc(a.customer_name)} · account ${esc(a.account_number)} · ${esc(a.service_address)}</p>`).join("")}
+  <p class="hint">Esc returns home.</p><div class="grid">${sorted.map(b => billCard("bills/" + b.id, b)).join("")}</div>`;
+}
+async function viewBill(id) {
+  const [b, a] = await Promise.all([api("/bills/" + encodeURIComponent(id)), api(`/bills/${encodeURIComponent(id)}/audit`)]);
+  return `<h1>Bill ${esc(b.id)} <span class="muted">· $${money(b.total_billed)}</span></h1>
+  <p class="muted">${period(b)} · ${esc(b.billing_days)} days · billed schedule ${esc(b.schedule_code)} (${esc(b.billed_rate_raw)}) · ${esc(b.history_year_status)}</p>
+  <div class="row"><button class="btn go" data-f data-act="run-audit" data-bill="${esc(b.id)}">Run fresh audit</button>
+  <button class="btn" data-f data-route="audits/${esc(b.id)}">Open in Audits</button></div><div id="bill-msg"></div>
+  <div class="panel"><h2>Charges <span class="muted">(${b.charges.length})</span></h2>
+  <table><thead><tr><th>Line</th><th class="num">Amount</th></tr></thead><tbody>
+  ${b.charges.map(c => `<tr data-f><td>${esc(c.line_label)}</td><td class="num">${moneyHtml(c.amount)}</td></tr>`).join("")}</tbody></table></div>
+  <div class="panel"><h2>Determinants</h2><table><thead><tr><th>Label</th><th>Type</th><th class="num">Value</th></tr></thead><tbody>
+  ${b.determinants.map(d => `<tr data-f><td>${esc(d.label)}</td><td class="mono">${esc(d.determinant_type)}</td><td class="num">${esc(d.value)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">None stored.</td></tr>`}</tbody></table></div>
+  <div class="panel"><h2>Audit runs <span class="muted">(${a.runs.length})</span></h2>
+  ${a.runs.length ? `<table><thead><tr><th>Run</th><th>Created</th><th class="num">Billed</th><th class="num">Expected</th><th class="num">Δ</th><th>Verdicts</th></tr></thead><tbody>
+  ${a.runs.slice().reverse().map(r => { const t = r.report.like_for_like_totals || {}; return `<tr data-f><td>#${esc(r.id)}</td><td>${esc(r.created_at)}</td>
+    <td class="num">${money(t.billed)}</td><td class="num">${money(t.expected)}</td><td class="num">${moneyHtml(t.delta)}</td><td><div class="pills" style="margin:0">${verdictCounts(r.lines)}</div></td></tr>`; }).join("")}</tbody></table>`
+   : `<p class="muted">This bill has not been audited.</p>`}</div>`;
+}
+
+/* ---------- 4. Audits ---------- */
+async function viewAudits(p) {
+  if (!p[1]) {
+    const bills = (await api("/bills")).sort((a, b) => b.bill_from.localeCompare(a.bill_from) || b.id - a.id);
+    return `<h1>Audits</h1><p class="muted">Choose a bill.</p><p class="hint">Esc returns home.</p><div class="grid">${bills.map(b => billCard("audits/" + b.id, b)).join("")}</div>`;
+  }
+  const id = encodeURIComponent(p[1]);
+  const bill = await api("/bills/" + id);
+  afterRender = async tok => { await Promise.all([loadAudit(id, tok), loadReview(id, tok), loadComparison(id, tok)]); };
+  return `<h1>Audit · Bill ${esc(bill.id)}</h1><p class="muted">${period(bill)} · billed schedule ${esc(bill.schedule_code)} · $${money(bill.total_billed)}</p>
+  <p class="hint">Esc returns to the bill list.</p>
+  <div id="audit-lines" class="panel noprint"><p class="muted">Loading audit…</p></div>
+  <div id="audit-report" class="panel printable"><p class="muted">Loading report…</p></div>
+  <div id="review" class="panel noprint"><p class="muted">Loading schedule review…</p></div>
+  <div id="comparison" class="panel printable"><p class="muted">Loading comparison…</p></div>`;
+}
+const setPanel = (id, tok, html) => { if (tok === routeToken) { const el = document.getElementById(id); if (el) el.innerHTML = html; } };
+
+async function loadAudit(id, tok) {
+  let a;
+  try { a = await api(`/bills/${id}/audit`); } catch (e) { setPanel("audit-lines", tok, alertCard(e, "Audit unavailable")); setPanel("audit-report", tok, ""); return; }
+  const r = latestRun(a);
+  if (!r) {
+    setPanel("audit-lines", tok, `<h2>Audit lines</h2><p class="muted">No audit run for this bill.</p><div class="row"><button class="btn go" data-f data-act="run-audit" data-bill="${id}">Run audit</button></div><div id="bill-msg"></div>`);
+    setPanel("audit-report", tok, `<h2>Audit report</h2><p class="muted">Run an audit to produce a report.</p>`); return;
+  }
+  const t = r.report.like_for_like_totals || {};
+  setPanel("audit-lines", tok, `<h2>Audit lines <span class="muted">· run #${esc(r.id)}</span></h2>
+  <div class="row"><span class="muted">Billed $${money(t.billed)} · Expected $${money(t.expected)} · Δ $${money(t.delta)}</span>
+  <div class="pills" style="margin:0">${verdictCounts(r.lines)}</div>
+  <button class="btn go" data-f data-act="run-audit" data-bill="${id}">Run fresh audit</button></div><div id="bill-msg"></div>
+  <table><thead><tr><th>Line</th><th class="num">Billed</th><th class="num">Expected</th><th class="num">Δ</th><th>Verdict</th><th>Evidence</th></tr></thead><tbody>
+  ${r.lines.map(l => { const d = l.detail || {};
+    const ev = d.rate !== undefined && d.rate !== null ? `${esc(d.rate)} ${esc(d.unit || "")} × ${esc(d.determinant_value ?? "—")} ${esc(d.determinant_type || "")}`
+      : esc(d.reason || d.evidence || "");
+    return `<tr data-f><td>${esc(l.line_label)}</td><td class="num">${money(l.billed_amount)}</td><td class="num">${money(l.expected_amount)}</td>
+    <td class="num">${moneyHtml(l.delta)}</td><td>${verdictPill(l)}</td><td class="muted">${ev}</td></tr>`; }).join("")}</tbody></table>`);
+  try {
+    const md = await api(`/bills/${id}/audit/report`);
+    setPanel("audit-report", tok, `<div class="row noprint"><h2 style="margin:0">Audit report</h2><button class="btn" data-f data-act="print" data-target="audit-report">Print report</button></div>${renderMd(md)}`);
+  } catch (e) { setPanel("audit-report", tok, `<h2>Audit report</h2>${alertCard(e, "Report unavailable")}`); }
+}
+
+function candidateDetail(c) {
+  if (c.status !== "computed") return "";
+  const sel = Object.entries(c.selection || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v.selected || "")} — ${esc(v.basis || "")}${v.excluded ? ` (excluded: ${esc(v.excluded.join(", "))}${v.excluded_amount ? ` $${money(v.excluded_amount)}` : ""})` : ""}</dd>`).join("");
+  return `<details><summary data-f>Lines</summary><table><thead><tr><th>Component</th><th class="num">Amount</th></tr></thead><tbody>
+    ${c.schedule_lines.map(l => `<tr><td>${esc(l.component_type)}</td><td class="num">${money(l.amount)}</td></tr>`).join("")}
+    ${c.rider_lines.map(l => `<tr><td>${esc(l.rider)} · ${esc(l.component_type)}</td><td class="num">${money(l.amount)}</td></tr>`).join("")}</tbody></table>
+    ${sel ? `<dl class="kv">${sel}</dl>` : ""}
+    ${(c.riders_excluded || []).length ? `<p class="muted">Excluded riders: ${c.riders_excluded.map(r => `${esc(r.rider)} (${esc(r.reason)})`).join("; ")}</p>` : ""}</details>`;
+}
+async function loadReview(id, tok, msg) {
+  let s;
+  try { s = await api(`/bills/${id}/schedule-review`); } catch (e) { setPanel("review", tok, `<h2>Schedule review</h2>${alertCard(e, "Review unavailable")}`); return; }
+  const reviewer = localStorage.getItem("reviewer") || "";
+  setPanel("review", tok, `<h2>Schedule review</h2>
+  <p class="muted">Billed schedule ${esc(s.billed_schedule_code)} · ${s.selected_schedule ? `selected: <b>${esc(s.selected_schedule)}</b>` : "no schedule selected"}
+  · determinants: ${Object.entries(s.determinants).map(([k, v]) => `${esc(k)} ${esc(v)}`).join(", ") || "none"}</p>
+  <div class="row"><label class="muted">Reviewer <input id="reviewer" placeholder="Your name" value="${esc(reviewer)}"></label>
+  <label class="muted">Note <input id="note" placeholder="Optional note" size="36"></label></div>
+  <div id="review-msg">${msg || ""}</div>
+  <table><thead><tr><th>Schedule</th><th class="num">Total</th><th>Outcome</th><th>Decision</th><th>Actions</th></tr></thead><tbody>
+  ${s.candidates.map(c => { const computed = c.status === "computed", d = c.decision;
+    return `<tr data-f><td><b>${esc(c.schedule_code)}</b>${c.selected ? " " + pill("SELECTED", "blue") : ""}</td>
+    <td class="num">${computed ? "$" + money(c.total) : "—"}</td>
+    <td>${computed ? `${pill("COMPUTED", "green")} <span class="muted">schedule $${money(c.schedule_subtotal)} + riders $${money(c.rider_subtotal)}</span>${candidateDetail(c)}`
+      : `${pill(c.reason || "blocked", "amber")} <span class="muted">${esc(c.blocker || "")}</span>`}</td>
+    <td>${d ? `${pill(d.decision === "works" ? "WORKS" : "DOESN'T WORK", d.decision === "works" ? "green" : "red")} <span class="muted">${esc(d.reviewer)}${d.note ? " · " + esc(d.note) : ""}</span>` : `<span class="muted">undecided</span>`}</td>
+    <td><div class="row" style="margin:0">
+      <button class="btn" data-f data-act="decide" data-bill="${id}" data-code="${esc(c.schedule_code)}" data-decision="works">Works</button>
+      <button class="btn" data-f data-act="decide" data-bill="${id}" data-code="${esc(c.schedule_code)}" data-decision="doesnt_work">Doesn't work</button>
+      ${computed ? `<button class="btn go" data-f data-act="select" data-bill="${id}" data-code="${esc(c.schedule_code)}">Select</button>` : ""}</div></td></tr>`; }).join("")}</tbody></table>`);
+}
+async function loadComparison(id, tok) {
+  try {
+    const md = await api(`/bills/${id}/schedule-comparison`);
+    setPanel("comparison", tok, `<div class="row noprint"><h2 style="margin:0">Schedule comparison</h2><button class="btn" data-f data-act="print" data-target="comparison">Print comparison</button></div>${renderMd(md)}`);
+  } catch (e) { setPanel("comparison", tok, `<h2>Schedule comparison</h2>${alertCard(e, "No comparison available")}`); }
+}
+
+/* ---------- 5. Upload ---------- */
+async function viewUpload() {
+  return `<h1>Upload</h1><p class="hint">Enter on a tile opens the file picker · you can also drop a PDF on it · Esc returns home.</p>
+  <div class="grid">
+    <div class="card drop" data-f data-act="pick" data-kind="bill" role="button"><div class="k">Bill history</div><div class="t">Upload a bill PDF</div>
+      <div class="s">Dominion EAP usage history. Uploads as soon as a file is chosen.</div><div class="s" id="bill-file" style="margin-top:10px"></div></div>
+    <div class="card drop" data-kind="tariff" id="tariff-tile" tabindex="0" data-f data-act="pick-tariff"><div class="k">Tariff</div><div class="t">Upload a tariff PDF</div>
+      <div class="s">Choose kind and code, then drop or pick the file.</div>
+      <div class="row" style="margin-top:12px"><select id="t-kind"><option>schedule</option><option>rider</option></select>
+      <input id="t-code" placeholder="Code, e.g. 110 or T-CM" size="20"></div><div class="s" id="tariff-file"></div></div>
+  </div>
+  <input type="file" id="file-bill" accept="application/pdf" hidden><input type="file" id="file-tariff" accept="application/pdf" hidden>
+  <div id="upload-msg"></div>`;
+}
+async function doUpload(kind, file) {
+  const out = document.getElementById("upload-msg"); if (!file) return;
+  out.innerHTML = `<p class="muted">Uploading ${esc(file.name)}…</p>`;
+  const fd = new FormData(); fd.append("file", file);
+  let url = "/uploads/bill";
+  if (kind === "tariff") {
+    const code = document.getElementById("t-code").value.trim();
+    if (!code) { out.innerHTML = alertCard(new ApiError(422, { message: "A tariff code is required.", failures: ["Enter the schedule or rider code before uploading."] })); return; }
+    fd.append("kind", document.getElementById("t-kind").value); fd.append("code", code); url = "/uploads/tariff";
+  }
+  try {
+    const r = await api(url, { method: "POST", body: fd });
+    out.innerHTML = okCard("Accepted", `<dl class="kv">${Object.entries(r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</dd>`).join("")}</dl>`);
+  } catch (e) { out.innerHTML = alertCard(e, "Upload refused"); }
+}
+
+/* ---------- actions ---------- */
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest("[data-act], [data-route]"); if (!t) return;
+  if (t.dataset.act) {
+    ev.preventDefault();
+    const act = t.dataset.act, bill = t.dataset.bill;
+    if (act === "print") return printSection(t.dataset.target);
+    if (act === "pick") return document.getElementById("file-bill").click();
+    if (act === "pick-tariff") { if (ev.target.closest("select, input")) return; return document.getElementById("file-tariff").click(); }
+    if (act === "run-audit") {
+      t.disabled = true;
+      const box = document.getElementById("bill-msg");
+      try {
+        const r = await api(`/bills/${bill}/audit`, { method: "POST" });
+        if (box) box.innerHTML = okCard("Audit complete", esc(JSON.stringify(r.statuses)));
+        const tok = routeToken;
+        if (parts()[0] === "audits") { await loadAudit(bill, tok); const b2 = document.getElementById("bill-msg"); if (b2) b2.innerHTML = okCard("Audit complete", esc(JSON.stringify(r.statuses))); }
+        else render();
+      } catch (e) { if (box) box.innerHTML = alertCard(e, "Audit refused"); t.disabled = false; }
+      return;
+    }
+    if (act === "decide" || act === "select") {
+      const reviewer = (document.getElementById("reviewer") || {}).value || "", note = (document.getElementById("note") || {}).value || "";
+      localStorage.setItem("reviewer", reviewer);
+      const tok = routeToken, code = t.dataset.code;
+      try {
+        if (act === "decide") await post(`/bills/${bill}/schedule-review/decision`, { schedule_code: code, decision: t.dataset.decision, reviewer, note });
+        else await post(`/bills/${bill}/schedule-review/select`, { schedule_code: code });
+        await loadReview(bill, tok, okCard(act === "decide" ? "Decision recorded" : "Schedule selected", `Schedule ${esc(code)}`));
+        await loadComparison(bill, tok);
+      } catch (e) { await loadReview(bill, tok, alertCard(e, act === "decide" ? "Decision refused" : "Selection refused")); await loadComparison(bill, tok); }
+      initFocus(false); return;
+    }
+    return;
+  }
+  if (t.dataset.route) go(t.dataset.route);
 });
-document.getElementById("bill-form").addEventListener("submit", e => {
-  e.preventDefault();
-  submit(e.target, "/uploads/bill", document.getElementById("bill-result"));
+document.addEventListener("change", ev => {
+  if (ev.target.id === "file-bill") { document.getElementById("bill-file").textContent = ev.target.files[0]?.name || ""; doUpload("bill", ev.target.files[0]); }
+  if (ev.target.id === "file-tariff") { document.getElementById("tariff-file").textContent = ev.target.files[0]?.name || ""; doUpload("tariff", ev.target.files[0]); }
+});
+["dragover", "dragleave", "drop"].forEach(n => document.addEventListener(n, ev => {
+  const tile = ev.target.closest && ev.target.closest(".drop"); if (!tile) return;
+  ev.preventDefault();
+  if (n === "dragover") tile.classList.add("over");
+  else { tile.classList.remove("over"); if (n === "drop") doUpload(tile.dataset.kind, ev.dataTransfer.files[0]); }
+}));
+
+/* ---------- roving focus + spatial arrow navigation ---------- */
+function visible(el) { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.closest("[hidden]"); }
+function focusables() { return [...document.querySelectorAll("[data-f]")].filter(visible); }
+function initFocus(moveFocus) {
+  const all = document.querySelectorAll("[data-f]");
+  all.forEach(e => { if (!e.hasAttribute("tabindex") || e.getAttribute("tabindex") !== "0") e.setAttribute("tabindex", "-1"); });
+  const cur = document.activeElement && document.activeElement.matches && document.activeElement.matches("[data-f]") ? document.activeElement : null;
+  if (cur) { cur.setAttribute("tabindex", "0"); return; }
+  const first = [...$app.querySelectorAll("[data-f]")].find(visible) || document.querySelector("nav [data-f]");
+  if (first) { first.setAttribute("tabindex", "0"); if (moveFocus) first.focus({ preventScroll: true }); }
+}
+document.addEventListener("focusin", ev => {
+  const t = ev.target; if (!t.matches || !t.matches("[data-f]")) return;
+  document.querySelectorAll('[data-f][tabindex="0"]').forEach(e => { if (e !== t) e.setAttribute("tabindex", "-1"); });
+  t.setAttribute("tabindex", "0");
+  if (!t.closest("nav")) t.scrollIntoView({ block: "nearest", inline: "center" });
+});
+function move(dir) {
+  const cur = document.activeElement && document.activeElement.matches("[data-f]") ? document.activeElement : null;
+  const list = focusables(); if (!list.length) return false;
+  if (!cur) { list[0].focus(); return true; }
+  const a = cur.getBoundingClientRect(), ax = a.left + a.width / 2, ay = a.top + a.height / 2;
+  let best = null, bestScore = Infinity;
+  for (const el of list) {
+    if (el === cur) continue;
+    const b = el.getBoundingClientRect(), bx = b.left + b.width / 2, by = b.top + b.height / 2, dx = bx - ax, dy = by - ay;
+    let main, cross;
+    if (dir === "ArrowRight") { if (b.left < a.right - 2 && dx <= 0) continue; main = dx; cross = Math.abs(dy); }
+    else if (dir === "ArrowLeft") { if (b.right > a.left + 2 && dx >= 0) continue; main = -dx; cross = Math.abs(dy); }
+    else if (dir === "ArrowDown") { if (dy <= 2 && b.top < a.bottom - 2) continue; main = dy; cross = Math.abs(dx); }
+    else { if (dy >= -2 && b.bottom > a.top + 2) continue; main = -dy; cross = Math.abs(dx); }
+    if (main <= 0) continue;
+    const score = main + cross * 3;
+    if (score < bestScore) { bestScore = score; best = el; }
+  }
+  if (best) { best.focus(); return true; }
+  return false;
+}
+document.addEventListener("keydown", ev => {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const el = document.activeElement, typing = el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+  if (ev.key === "Escape") {
+    if (typing) { el.blur(); const f = el.closest("[data-f]"); if (f) f.focus(); ev.preventDefault(); return; }
+    const back = parentRoute(); if (back) { ev.preventDefault(); go(back); }
+    return;
+  }
+  if (typing || el && el.tagName === "SUMMARY" && (ev.key === "Enter" || ev.key === " ")) return;
+  if (/^Arrow(Up|Down|Left|Right)$/.test(ev.key)) { if (move(ev.key)) ev.preventDefault(); return; }
+  if (ev.key === "Enter" && el && el.matches("[data-f]") && !/^(BUTTON|A|INPUT|SELECT|SUMMARY)$/.test(el.tagName) && !el.matches("tr")) {
+    ev.preventDefault(); el.click();
+  } else if (ev.key === "Enter" && el && el.matches("a[data-f]")) { ev.preventDefault(); el.click(); }
 });
 
-async function loadBills() {
-  const bills = await (await fetch("/bills")).json();
-  document.getElementById("bill-picker").innerHTML = bills.map(b =>
-    `<option value="${esc(b.id)}">#${esc(b.id)} ${esc(b.bill_from)} to ${esc(b.bill_to)} (${esc(b.schedule_code)})</option>`).join("");
-}
-
-function renderAudit(el, audit) {
-  if (!audit.runs.length) { el.innerHTML = "<p>No audit yet for this bill. Press Run audit.</p>"; return; }
-  el.innerHTML = audit.runs.map(run => `
-    <h3>Audit run ${esc(run.id)} &middot; mapping ${esc(run.mapping_version)}</h3>
-    <table><tr><th>Label</th><th class="num">Billed</th><th class="num">Expected</th><th>Verdict</th></tr>
-    ${run.lines.map(l => `<tr class="${/^(OVER|UNDER|MISSING|ZERO)/.test(l.verdict) ? "bad" : ""}">
-      <td>${esc(l.line_label)}</td><td class="num">${esc(l.billed_amount)}</td>
-      <td class="num">${esc(l.expected_amount)}</td><td>${esc(l.verdict)}</td></tr>`).join("")}
-    </table>`).join("");
-}
-
-async function loadAudit(run) {
-  const id = document.getElementById("bill-picker").value;
-  const el = document.getElementById("audit-result");
-  if (!id) return;
-  const response = await fetch(`/bills/${id}/audit`, { method: run ? "POST" : "GET" });
-  const body = await response.json();
-  if (response.ok) renderAudit(el, body); else show(el, false, body.detail || body);
-}
-
-document.getElementById("bill-picker").addEventListener("change", () => loadAudit(false));
-document.getElementById("audit-run").addEventListener("click", () => loadAudit(true));
-loadBills().then(() => loadAudit(false));
+render();
 </script>
 </body>
 </html>

@@ -891,3 +891,37 @@ row with `status = 'active'` for a schedule, and a superseded version keeps that
 status (only `effective_to` is set). Activating a third version of one schedule
 is therefore refused ("Found 2 active versions"). The first real pair works;
 the lifecycle needs a `superseded` status before a third amendment.
+
+## Stage 6 — B5 + B6: back-bill lookback and line-item validation
+
+**Scope, stated honestly.** Only Amendment 12 (effective 2025-07-01) is loaded.
+The live lookback therefore covers the three audited bills of Aug–Oct 2025
+(bills 29–31); the other 28 bills predate or straddle the version and are listed
+`no_covering_version`. They are never estimated against a version that was not in
+force; they become reauditable as historical versions are loaded.
+
+**B5 — `src/lookback.py`.** `account_lookback(conn, account_number)` is read-only:
+it uses stored audit runs and never creates one. Per bill, in period order, the
+status is `audited` (latest run's billed like-for-like, recomputed, delta;
+overcharge = billed − recomputed when positive), `no_covering_version`, or
+`not_audited` (a covering version exists but no run is stored — an addition to
+the two specified statuses, so the gap is visible rather than silent). Totals:
+total overcharged, audited count, overcharged count, net delta, and the count and
+reasons of not-reauditable bills. CLI `--account N` writes
+`data/reports/<account>-lookback.md` (gitignored). API:
+`GET /accounts/{account_number}/lookback` (404 unknown account, 422 refusal).
+
+**B6 — `src/line_validation.py`.** `validate_bill_lines(conn, bill_id)` reads the
+bill's latest audit run and returns one row per billed line with `status` (`ok`
+or the first flag) and a `flags` list (a line may carry several). Flags:
+`zero_expected_billed` (zero-expected line billed above 0.00); `unmapped_label`
+(a billed charge with no mapping entry — such a bill cannot get a run, so this is
+detected by comparing `bill_charges` with the mapping); `amount_mismatch` (direct
+line, |billed − recomputed| above one cent; a MISSING line, billed 0.00 against an
+expected amount, is flagged here); `rate_disagreement` (implied unit rate, billed
+÷ determinant, differs from the stored tariff rate by more than half a cent of the
+billed amount). `rate_disagreement` applies only to non-tiered `usd_per_kwh` and
+fixed-monthly components; other units are not judged. Refusals: no audit run
+(422), unknown bill (404), a mapped charge missing from the run (stale run), and
+a checked-in mapping version that differs from the run's. API:
+`GET /bills/{bill_id}/line-validation`.

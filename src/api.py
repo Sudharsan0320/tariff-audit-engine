@@ -31,6 +31,8 @@ try:
         render_report,
     )
     from src.ingest_usage_history import ingest_usage_pdf
+    from src.line_validation import BillNotFound, ValidationRefused, validate_bill_lines
+    from src.lookback import AccountNotFound, LookbackError, account_lookback
     from src.parse_rider import parse_rider
     from src.schedule_comparison import (
         ComparisonRefused,
@@ -58,6 +60,8 @@ except ImportError:
         render_report,
     )
     from ingest_usage_history import ingest_usage_pdf
+    from line_validation import BillNotFound, ValidationRefused, validate_bill_lines
+    from lookback import AccountNotFound, LookbackError, account_lookback
     from parse_rider import parse_rider
     from schedule_comparison import (
         ComparisonRefused,
@@ -158,6 +162,32 @@ def get_version(version_id: int):
 @app.get("/accounts")
 def list_accounts():
     return query("SELECT * FROM accounts ORDER BY account_number")
+
+
+@app.get("/accounts/{account_number}/lookback")
+def get_account_lookback(account_number: str):
+    conn = db.connect(target(), readonly=True)
+    try:
+        return _plain(account_lookback(conn, account_number))
+    except AccountNotFound as error:
+        refuse(404, str(error))
+    except (LookbackError, RepricingError) as error:
+        refuse(422, "The lookback was refused.", [str(error)])
+    finally:
+        conn.close()
+
+
+@app.get("/bills/{bill_id}/line-validation")
+def get_line_validation(bill_id: int):
+    conn = db.connect(target(), readonly=True)
+    try:
+        return _plain(validate_bill_lines(conn, bill_id))
+    except BillNotFound as error:
+        refuse(404, str(error))
+    except ValidationRefused as error:
+        refuse(422, "The line validation was refused.", [str(error)])
+    finally:
+        conn.close()
 
 
 @app.get("/bills")

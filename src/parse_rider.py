@@ -1,15 +1,18 @@
 import argparse
-import os
 import re
-import sqlite3
 from pathlib import Path
 
 import pdfplumber
 
+try:
+    from src import db
+except ImportError:
+    import db
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PDF_PATH = ROOT / "data" / "raw" / "VEPGA-Amendment-12-Effective-July-1-2025.pdf"
-DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
+DATABASE_PATH = db.default_target(ROOT / "data" / "tariffs.db")
 EFFECTIVE_FROM = "2025-07-01"
 RIDER_VERSION = 12
 UTILITY = "Virginia Electric and Power Company"
@@ -287,7 +290,7 @@ def parse_rider(rider_code, pdf_path=PDF_PATH, database_path=DATABASE_PATH):
         pages = find_rider_pages(pdf, rider_code)
         extracted = parse_rider_components(rider_code, pages)
 
-    with sqlite3.connect(database_path) as conn:
+    with db.connect(database_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             version_id = ensure_rider_version(conn, rider_code)
@@ -348,7 +351,7 @@ def main():
     args = parser.parse_args()
     try:
         version_id, component_count = parse_rider(args.rider_code)
-    except (OSError, sqlite3.Error, ValueError) as error:
+    except (OSError, db.Error, ValueError) as error:
         print(f"FAIL: {error}")
         return 1
     print(f"Version {version_id}: {component_count} components inserted")

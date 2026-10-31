@@ -7,9 +7,13 @@ is not stored is an error (ingest runs first).
 """
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
+
+try:
+    from src import db
+except ImportError:
+    import db
 
 if __package__:
     from .ingest_usage_history import (
@@ -77,7 +81,7 @@ def main():
     try:
         draft = parse_usage_pdf(args.pdf_path)
         expected = sum(len(bill.get("bill_determinants", [])) for bill in draft["bills"])
-        with sqlite3.connect(DATABASE_PATH) as conn:
+        with db.connect(DATABASE_PATH) as conn:
             inserted = enrich_determinants(conn, draft)
             stored = conn.execute(
                 """
@@ -90,7 +94,7 @@ def main():
             raise ValueError(
                 f"Determinants incomplete: {stored} stored, {expected} parsed."
             )
-    except (OSError, sqlite3.Error, ValueError) as error:
+    except (OSError, db.Error, ValueError) as error:
         print(f"FAIL: {error}")
         return 1
     print(f"PASS: {inserted} determinants inserted; {stored} stored, {expected} parsed.")

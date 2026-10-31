@@ -1,17 +1,25 @@
 import argparse
-import os
 import pdfplumber
 import re
-import sqlite3
 import sys
+
+try:
+    from src import db
+except ImportError:
+    import db
 
 
 parser = argparse.ArgumentParser(description="Parse a Virginia tariff schedule.")
 parser.add_argument("schedule_code", type=str, help="Schedule code to parse")
+parser.add_argument(
+    "--pdf",
+    default="data/raw/VEPGA-Amendment-12-Effective-July-1-2025.pdf",
+    help="Tariff PDF to read (default: the Amendment 12 PDF)",
+)
 args = parser.parse_args()
 
-pdf_path = "data/raw/VEPGA-Amendment-12-Effective-July-1-2025.pdf"
-conn = sqlite3.connect(os.environ.get("TARIFF_DB_PATH") or "data/tariffs.db")
+pdf_path = args.pdf
+conn = db.connect(db.default_target("data/tariffs.db"))
 
 matching_pages = []
 schedule_header = f"SCHEDULE {args.schedule_code}"

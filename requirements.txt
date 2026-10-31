@@ -3,3 +3,8 @@ openpyxl
 pyxlsb
 pytest
 pdfplumber
+psycopg[binary]
+fastapi
+uvicorn
+python-multipart
+httpx

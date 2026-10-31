@@ -6,7 +6,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
+try:
+    from src import db
+except ImportError:
+    import db
 
 if __package__:
     from .normalize_schedule import normalize_schedule_code
@@ -33,7 +36,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
+DATABASE_PATH = db.default_target(ROOT / "data" / "tariffs.db")
 DEFAULT_MAPPING_PATH = ROOT / "docs" / "bill-label-mapping.json"
 DIRECT = "direct"
 ZERO_EXPECTED = "zero_expected"
@@ -163,6 +166,8 @@ def _fetch_bill(conn, bill_id):
     ).fetchall()
     bill["determinants"] = {}
     for _, determinant_type, value in determinant_rows:
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)  # Postgres returns 731.0 where SQLite returns 731
         numeric_value = as_decimal(value)
         if (
             determinant_type in bill["determinants"]
@@ -278,14 +283,33 @@ def _tariff_data(conn, bill, mapping):
         conn, alternative_version["id"]
     )
 
+    version_keys = {
+        v["id"]: f'{v["schedule_code"]}#{v["version"]}' for v in versions
+    }
+
+    def natural(row):
+        # surrogate ids are not content: identify a row's version by its natural key
+        out = {k: v for k, v in row.items() if k != "id"}
+        if "tariff_version_id" in out:
+            out["tariff_version_id"] = version_keys[out["tariff_version_id"]]
+        return out
+
+    def canonical(rows):
+        dumped = (
+            json.dumps(natural(r), sort_keys=True, default=_json_default, separators=(",", ":"))
+            for r in rows
+        )
+        return sorted(dumped)
+
     snapshot = {
-        "versions": versions,
-        "components": components + alternative_components,
-        "rules": [
-            rule
-            for version_rules in rules.values()
-            for rule in version_rules
-        ],
+        "versions": sorted(
+            json.dumps(natural(v), sort_keys=True, default=_json_default)
+            for v in versions
+        ),
+        "components": canonical(components + alternative_components),
+        "rules": canonical(
+            rule for version_rules in rules.values() for rule in version_rules
+        ),
     }
     serialized_snapshot = json.dumps(
         snapshot, sort_keys=True, default=_json_default, separators=(",", ":")
@@ -971,9 +995,9 @@ def main():
     )
     args = parser.parse_args()
     try:
-        with sqlite3.connect(DATABASE_PATH) as conn:
+        with db.connect(DATABASE_PATH) as conn:
             result = run_audits(conn, args.mapping, args.bill_ids)
-    except (OSError, sqlite3.Error, ValueError) as error:
+    except (OSError, db.Error, ValueError) as error:
         print(f"FAIL: {error}")
         return 1
     print(

@@ -1,13 +1,13 @@
 import math
-import os
-import sqlite3
 from pathlib import Path
 
+try:
+    from src import db
+except ImportError:
+    import db
 
-DATABASE_PATH = Path(
-    os.environ.get("TARIFF_DB_PATH")
-    or Path(__file__).resolve().parents[1] / "data" / "tariffs.db"
-)
+
+DATABASE_PATH = db.default_target(Path(__file__).resolve().parents[1] / "data" / "tariffs.db")
 VALID_UNITS = {
     "usd_per_kwh",
     "usd_per_kw",
@@ -211,7 +211,7 @@ def validate_drafts(conn, version_id=None):
 
 
 def main():
-    with sqlite3.connect(DATABASE_PATH) as conn:
+    with db.connect(DATABASE_PATH) as conn:
         failures = validate_drafts(conn)
 
     if failures:

@@ -1,5 +1,8 @@
 import argparse
-import sqlite3
+try:
+    from src import db
+except ImportError:
+    import db
 
 if __package__:
     from .validate_draft import DATABASE_PATH, validate_drafts
@@ -77,9 +80,9 @@ def main():
     args = parser.parse_args()
 
     try:
-        with sqlite3.connect(DATABASE_PATH) as conn:
+        with db.connect(DATABASE_PATH) as conn:
             activate_version(conn, args.version_id)
-    except (sqlite3.Error, ValueError) as error:
+    except (db.Error, ValueError) as error:
         print(f"FAIL: {error}")
         return 1
 

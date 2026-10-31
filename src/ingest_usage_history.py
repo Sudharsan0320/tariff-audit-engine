@@ -3,7 +3,10 @@ from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
-import sqlite3
+try:
+    from src import db
+except ImportError:
+    import db
 
 if __package__:
     from .parse_usage import parse_usage_pdf, summarize_draft
@@ -264,9 +267,9 @@ def main():
     parser.add_argument("pdf_path", type=Path, help="Path to a native EAP PDF")
     args = parser.parse_args()
     try:
-        with sqlite3.connect(DATABASE_PATH) as conn:
+        with db.connect(DATABASE_PATH) as conn:
             draft, status, validation, _ = ingest_usage_pdf(conn, args.pdf_path)
-    except (OSError, sqlite3.Error, ValueError) as error:
+    except (OSError, db.Error, ValueError) as error:
         print(f"FAIL: {error}")
         return 1
     _print_result(draft, status, validation)

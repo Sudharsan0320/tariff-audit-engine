@@ -1,13 +1,16 @@
 import argparse
 from collections import Counter
 import json
-import os
-import sqlite3
 from pathlib import Path
+
+try:
+    from src import db
+except ImportError:
+    import db
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
+DATABASE_PATH = db.default_target(ROOT / "data" / "tariffs.db")
 INVENTORY_PATH = ROOT / "docs" / "tariff-rules-inventory.json"
 EFFECTIVE_FROM = "2025-07-01"
 VERSION = 12
@@ -176,7 +179,10 @@ def main():
         description="Load reviewed Amendment 12 rules into tariff_rules."
     )
     parser.add_argument(
-        "--database", type=Path, default=DATABASE_PATH, help="SQLite database path"
+        "--database",
+        type=lambda value: value if db.is_postgres(value) else Path(value),
+        default=DATABASE_PATH,
+        help="SQLite database path or postgresql:// URL",
     )
     parser.add_argument(
         "--inventory", type=Path, default=INVENTORY_PATH, help="Reviewed JSON inventory"
@@ -185,7 +191,7 @@ def main():
 
     with args.inventory.open(encoding="utf-8") as file:
         inventory = json.load(file)
-    with sqlite3.connect(args.database) as conn:
+    with db.connect(args.database) as conn:
         counts = load_rules(conn, inventory)
 
     print(

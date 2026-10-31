@@ -6,13 +6,16 @@ is left alone.
 """
 
 import json
-import os
-import sqlite3
 import sys
 from pathlib import Path
 
+try:
+    from src import db
+except ImportError:
+    import db
+
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = Path(os.environ.get("TARIFF_DB_PATH") or ROOT / "data" / "tariffs.db")
+DATABASE_PATH = db.default_target(ROOT / "data" / "tariffs.db")
 INVENTORY_PATH = ROOT / "docs" / "tariff-rules-inventory.json"
 STATE = "VA"
 UTILITY = "Virginia Electric and Power Company"
@@ -53,7 +56,7 @@ def create_cross_reference_versions(conn, inventory):
 
 def main():
     inventory = json.loads(INVENTORY_PATH.read_text())
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = db.connect(DATABASE_PATH)
     try:
         created, skipped = create_cross_reference_versions(conn, inventory)
     finally:

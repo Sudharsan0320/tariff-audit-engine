@@ -13,7 +13,6 @@ import argparse
 import hashlib
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import time
@@ -21,10 +20,15 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from src import db
+except ImportError:
+    import db
+
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 DEFAULT_MANIFEST = ROOT / "docs" / "pipeline-manifest.json"
-DEFAULT_DATABASE = ROOT / "data" / "tariffs.db"
+DEFAULT_DATABASE = db.default_target(ROOT / "data" / "tariffs.db")
 DEFAULT_LOG_DIR = ROOT / "data" / "logs"
 STAGES = (
     "create_schema",
@@ -51,16 +55,26 @@ class StageFailure(Exception):
 
 
 # ---------------------------------------------------------------- snapshots
+def _describe(database):
+    target = normalize_target(database)
+    return db.describe(target) if db.is_postgres(target) else str(target.resolve())
+
+
 def _is_timestamp(column):
     return column.endswith("_at")
 
 
+def normalize_target(value):
+    """A postgresql:// URL stays a string; anything else is a SQLite file path."""
+    return value if db.is_postgres(value) else Path(value)
+
+
 def database_snapshot(database):
     """Per-table content digests; timestamp (*_at) columns are the only exclusion."""
-    database = Path(database)
-    if not database.exists():
+    database = normalize_target(database)
+    if not db.is_postgres(database) and not database.exists():
         return {"schema": "", "tables": {}}
-    conn = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    conn = db.connect(database, readonly=True)
     try:
         tables = {}
         schema_parts = []
@@ -155,14 +169,21 @@ def preflight(manifest, selected):
 class Context:
     def __init__(self, manifest, database, record):
         self.manifest = manifest
-        self.database = Path(database)
+        self.database = normalize_target(database)
         self.record = record
         self.notes = {}
 
     def run(self, script, *args):
         command = [sys.executable, str(SRC / script), *map(str, args)]
         label = " ".join([script, *map(str, args)])
-        env = dict(os.environ, TARIFF_DB_PATH=str(self.database))
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("TARIFF_DB_URL", "TARIFF_DB_PATH")
+        }
+        env["TARIFF_DB_URL" if db.is_postgres(self.database) else "TARIFF_DB_PATH"] = str(
+            self.database
+        )
         started = time.monotonic()
         result = subprocess.run(
             command, cwd=ROOT, env=env, capture_output=True, text=True, check=False
@@ -181,7 +202,7 @@ class Context:
         return output
 
     def draft_ids(self):
-        conn = sqlite3.connect(f"file:{self.database}?mode=ro", uri=True)
+        conn = db.connect(self.database, readonly=True)
         try:
             return [
                 row[0]
@@ -193,7 +214,7 @@ class Context:
             conn.close()
 
     def status_count(self, status):
-        conn = sqlite3.connect(f"file:{self.database}?mode=ro", uri=True)
+        conn = db.connect(self.database, readonly=True)
         try:
             return conn.execute(
                 "SELECT COUNT(*) FROM tariff_versions WHERE status = ?", (status,)
@@ -203,7 +224,8 @@ class Context:
 
 
 def stage_create_schema(ctx):
-    ctx.database.parent.mkdir(parents=True, exist_ok=True)
+    if not db.is_postgres(ctx.database):
+        ctx.database.parent.mkdir(parents=True, exist_ok=True)
     ctx.run("create_db.py")
 
 
@@ -323,7 +345,7 @@ def run_pipeline(manifest_path, database, selected, log_dir):
     started = datetime.now(timezone.utc)
     run = {
         "started_at": started.isoformat(),
-        "database": str(Path(database).resolve()),
+        "database": _describe(database),
         "manifest": str(Path(manifest_path).resolve()),
         "selected_stages": selected,
         "result": "success",
@@ -426,7 +448,12 @@ def print_summary(run, log_path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE)
+    parser.add_argument(
+        "--database",
+        type=normalize_target,
+        default=DEFAULT_DATABASE,
+        help="SQLite file path or postgresql:// URL (default: TARIFF_DB_URL, TARIFF_DB_PATH, then data/tariffs.db)",
+    )
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument("--stage", action="append", help="Run only this stage (repeatable).")
     parser.add_argument("--from-stage", help="Run this stage and every later stage.")
@@ -444,7 +471,7 @@ def main(argv=None):
         except (OSError, ValueError) as error:
             print(f"FAIL: {error}", file=sys.stderr)
             return 2
-        print(f"DRY RUN — database {args.database.resolve()}; nothing is executed.")
+        print(f"DRY RUN — database {_describe(args.database)}; nothing is executed.")
         for stage, commands in plan(manifest, selected).items():
             print(f"  {stage}")
             for command in commands:

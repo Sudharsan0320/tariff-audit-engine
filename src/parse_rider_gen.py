@@ -1,5 +1,8 @@
-import os
-import pdfplumber, re, sqlite3  # three toolboxes: pdfplumber reads PDFs, re does pattern-matching (regex), sqlite3 talks to the database
+import pdfplumber, re  # two toolboxes: pdfplumber reads PDFs, re does pattern-matching (regex)
+try:
+    from src import db
+except ImportError:
+    import db
 
 with pdfplumber.open("data/raw/rider-gen.pdf") as pdf:  # open the PDF as 'pdf'; with auto-closes it when the block ends
     print(f"Pages: {len(pdf.pages)}")  # f-string: { } runs code inside text; len() counts the PDF's pages
@@ -9,7 +12,7 @@ with pdfplumber.open("data/raw/rider-gen.pdf") as pdf:  # open the PDF as 'pdf';
     print(f"Tables :{len(tables)}")  # how many tables were found
     print(tables[0])  # first table: a list of rows, each row a list of cell texts
 
-conn = sqlite3.connect(os.environ.get("TARIFF_DB_PATH") or "data/tariffs.db")  # open the database file
+conn = db.connect(db.default_target("data/tariffs.db"))  # open the database
 cur = conn.cursor()  # cursor: the messenger that carries SQL to the database
 version_values = (  # a tuple (an ordered list you can't change after making) holding the six values that identify this version...
     "VA",  # ...the state

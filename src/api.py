@@ -7,6 +7,7 @@ TARIFF_DB_PATH exactly like the stages. Posture (E5): local single-user tool,
 no authentication, bind to localhost.
 """
 
+from decimal import Decimal
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
 try:
     from src import db
@@ -30,6 +32,18 @@ try:
     )
     from src.ingest_usage_history import ingest_usage_pdf
     from src.parse_rider import parse_rider
+    from src.schedule_comparison import (
+        ComparisonRefused,
+        load_comparison_data,
+        render_comparison,
+    )
+    from src.schedule_review import (
+        RepricingError,
+        ReviewRefused,
+        get_review_state,
+        record_decision,
+        select_schedule,
+    )
     from src.validate_draft import validate_drafts
 except ImportError:
     import db
@@ -43,6 +57,18 @@ except ImportError:
     )
     from ingest_usage_history import ingest_usage_pdf
     from parse_rider import parse_rider
+    from schedule_comparison import (
+        ComparisonRefused,
+        load_comparison_data,
+        render_comparison,
+    )
+    from schedule_review import (
+        RepricingError,
+        ReviewRefused,
+        get_review_state,
+        record_decision,
+        select_schedule,
+    )
     from validate_draft import validate_drafts
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +209,82 @@ def get_audit_report(bill_id: int):
         refuse(404, str(error))
     except AuditReportError as error:
         refuse(422, "The audit report was refused.", [str(error)])
+    finally:
+        conn.close()
+    return Response(content=markdown, media_type="text/markdown")
+
+
+def _bill_or_404(bill_id):
+    if not query("SELECT 1 AS x FROM bills WHERE id = ?", (bill_id,)):
+        refuse(404, f"No bill {bill_id}.")
+
+
+def _plain(value):
+    """JSON-safe copy that keeps money exact (Decimal -> string, never float)."""
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
+
+
+class DecisionBody(BaseModel):
+    schedule_code: str
+    decision: str
+    reviewer: str
+    note: Optional[str] = None
+
+
+class SelectBody(BaseModel):
+    schedule_code: str
+
+
+@app.get("/bills/{bill_id}/schedule-review")
+def get_schedule_review(bill_id: int):
+    _bill_or_404(bill_id)
+    conn = db.connect(target(), readonly=True)
+    try:
+        return _plain(get_review_state(conn, bill_id))
+    except (ReviewRefused, RepricingError) as error:
+        refuse(422, "The schedule review was refused.", [str(error)])
+    finally:
+        conn.close()
+
+
+@app.post("/bills/{bill_id}/schedule-review/decision")
+def post_schedule_decision(bill_id: int, body: DecisionBody):
+    _bill_or_404(bill_id)
+    try:
+        with db.connect(target()) as conn:
+            row = record_decision(
+                conn, bill_id, body.schedule_code, body.decision, body.reviewer, body.note
+            )
+    except ReviewRefused as error:
+        refuse(422, "The decision was refused.", [str(error)])
+    return row
+
+
+@app.post("/bills/{bill_id}/schedule-review/select")
+def post_schedule_select(bill_id: int, body: SelectBody):
+    _bill_or_404(bill_id)
+    try:
+        with db.connect(target()) as conn:
+            row = select_schedule(conn, bill_id, body.schedule_code)
+    except (ReviewRefused, RepricingError) as error:
+        refuse(422, "The selection was refused.", [str(error)])
+    return row
+
+
+@app.get("/bills/{bill_id}/schedule-comparison")
+def get_schedule_comparison(bill_id: int):
+    _bill_or_404(bill_id)
+    conn = db.connect(target(), readonly=True)
+    try:
+        markdown = render_comparison(*load_comparison_data(conn, bill_id))
+    except (ComparisonRefused, RepricingError) as error:
+        refuse(422, "The schedule comparison was refused.", [str(error)])
     finally:
         conn.close()
     return Response(content=markdown, media_type="text/markdown")

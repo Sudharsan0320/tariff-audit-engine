@@ -760,3 +760,77 @@ writes no file. **Deferred durable fix:** `audit_bills` should store the
 rate/determinant on `MISSING` lines when audits are created. That schema/data
 change is not part of B2 and is folded into Stage 3 (B16), the next time
 `audit_bills` is opened.
+
+## Stage 3 — B16: all-schedule repricing, human review, comparison
+
+`src/schedule_review.py` reprices a stored bill under every base schedule and
+returns, per schedule, either a full computation or exactly one reason. Nothing
+about a candidate is stored; only the human decision is.
+
+**H1′ — selection layer in front of the engine.** The engine's evaluation core
+(`evaluate_schedule_components`) is reused but never called raw; `billing_engine.py`
+is unmodified. Checks run in this order and the first failure decides the reason:
+
+1. Covering version, via `resolve_period_version` (none, or a period straddling a
+   version boundary) → `no_covering_version`.
+2. Zero priced components in the base version → `cross_reference_only`.
+3. Billing class, from the stored `billing_class_threshold` rule text and the
+   account's bill history (demand class only with a `demand` determinant and the
+   threshold met; otherwise `non_demand`).
+4. Variant selection: metered/unmetered from the account's meter status and the
+   stored `metered_unmetered_charge_switch` test on bill history (the excluded
+   variant and its amount are recorded on the candidate); primary/secondary from
+   the account voltage.
+5. Contracted-capacity basis (see the SGCM ruling), then determinant
+   pre-check for every base and rider component in order, naming the first
+   missing input. The engine's silent `total_consumption` fallback never makes
+   a candidate computable.
+6. Election/contract requirements (`percent`/`multiplier` components, contract
+   demand rules, `contribution_options`).
+
+An unexpected engine `ValueError` is a bug and surfaces as `RepricingError`; it
+is never converted into a reason.
+
+**H2 — riders.** Riders are selected by version identity (versions carrying rows
+for the billed schedule), never by the `RIDER %` name prefix, and each candidate
+uses its own `billing_category` rows. Rider G-CM (optional contribution, no
+election stored) is excluded from every candidate and the exclusion is stated in
+the candidate output and the comparison.
+
+**H3 — closed reason set.** `cross_reference_only`, `no_covering_version`,
+`missing_determinant` (naming the input), `needs_election_data`,
+`needs_contracted_amount`. A candidate never carries a partial total.
+
+**SGCM ruling.** A per-kW schedule whose stored rules define no measured demand
+(no rule type containing `demand`) is priced on a contracted capacity the bill
+cannot carry: it returns `needs_contracted_amount` naming the contracted standby
+capacity (SGCM, SGCM-1). Schedules 130/131/132/134 have demand rules and keep
+`missing_determinant: demand`. This check precedes the determinant pre-check.
+
+**H4 — decisions.** `schedule_review_decisions` (bill, schedule, `works` |
+`doesnt_work`, reviewer, note, decided_at, `selected`; unique per bill and
+schedule) is created additively by `create_db.py` (`CREATE TABLE IF NOT EXISTS`).
+Selecting requires a computed candidate and a `works` decision; a `doesnt_work`
+schedule or a reason candidate is refused. At most one schedule is selected per
+bill; rejecting the selected schedule clears the selection. Repricing is
+computed on every read.
+
+**H5 — comparison.** `src/schedule_comparison.py` renders the bill's billed
+lines against the selected schedule's computed lines as Markdown
+(`data/reports/`, gitignored). The like-for-like difference excludes
+out-of-scope billed lines (tax) and is computed − billed. It refuses when no
+schedule is selected. API: `GET /bills/{id}/schedule-review`,
+`POST .../schedule-review/decision`, `POST .../schedule-review/select`,
+`GET /bills/{id}/schedule-comparison`.
+
+**H6 — MISSING lines.** `audit_bills._missing_result` now stores `rate`, `unit`,
+`determinant_type` and `determinant_value` in the line's `detail`. Existing runs
+are untouched and not re-audited; the B2 reconstruction rule still applies to
+them.
+
+**Named limitation.** The engine cannot evaluate tiered `usd_per_kw` groups or
+`usd_per_rkva`, so repricing a demand schedule (130/131/134 and similar) for a
+bill that carries a demand determinant raises `RepricingError`. This is future
+engine work; bills without a demand determinant (including the October 2025
+pilot bill) are unaffected. Pre-Amendment-12 bills have no covering version and
+report `no_covering_version` for every schedule.

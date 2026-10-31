@@ -209,6 +209,24 @@ CREATE TABLE IF NOT EXISTS audit_lines (
 );
 """)
 
+# --- schedule_review_decisions: human review of repriced candidate schedules ---
+# Additive: CREATE TABLE IF NOT EXISTS upgrades existing databases in place. Only the
+# human decision is stored; candidate totals are always recomputed on read.
+cur.execute("""
+CREATE TABLE IF NOT EXISTS schedule_review_decisions (
+    id INTEGER PRIMARY KEY,
+    bill_id INTEGER NOT NULL,
+    schedule_code TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('works', 'doesnt_work')),
+    reviewer TEXT NOT NULL,
+    note TEXT,
+    decided_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    selected INTEGER NOT NULL DEFAULT 0 CHECK (selected IN (0, 1)),
+    FOREIGN KEY (bill_id) REFERENCES bills(id),
+    UNIQUE (bill_id, schedule_code)
+);
+""")
+
 conn.commit()  # commit() SAVES all changes into the file; without it, everything above is thrown away when you close
 conn.close()  # close() ends the connection, freeing it up
 print(f"Database created: {db.describe(DB_TARGET)}")  # print() shows text on screen; confirms the script finished

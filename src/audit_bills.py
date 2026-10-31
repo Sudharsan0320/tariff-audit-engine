@@ -438,6 +438,10 @@ def _missing_result(label, entry, candidates, determinants):
         _evaluate_mapped_component(candidates, determinants)
     )
     component = candidates[0]
+    variant = component.get("variant")
+    determinant_type = {"on_peak": "on_peak_usage", "off_peak": "off_peak_usage"}.get(
+        variant, "total_consumption"
+    )
     return {
         "bill_charge_id": None,
         "line_label": label,
@@ -450,7 +454,11 @@ def _missing_result(label, entry, candidates, determinants):
         "detail": {
             "evidence": entry["evidence"],
             "component_type": entry["component_type"],
-            "variant": component.get("variant"),
+            "variant": variant,
+            "rate": str(as_decimal(component["rate"])),
+            "unit": component["unit"],
+            "determinant_type": determinant_type,
+            "determinant_value": str(determinants.get(determinant_type, "")),
         },
     }
 

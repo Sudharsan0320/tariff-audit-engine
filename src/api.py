@@ -32,7 +32,9 @@ try:
     )
     from src.ingest_usage_history import ingest_usage_pdf
     from src.line_validation import BillNotFound, ValidationRefused, validate_bill_lines
+    from src.anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
     from src.lookback import AccountNotFound, LookbackError, account_lookback
+    from src import weather_check
     from src.parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
     from src.parse_rider import parse_rider
     from src.schedule_comparison import (
@@ -62,7 +64,9 @@ except ImportError:
     )
     from ingest_usage_history import ingest_usage_pdf
     from line_validation import BillNotFound, ValidationRefused, validate_bill_lines
+    from anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
     from lookback import AccountNotFound, LookbackError, account_lookback
+    import weather_check
     from parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
     from parse_rider import parse_rider
     from schedule_comparison import (
@@ -175,6 +179,23 @@ def get_account_lookback(account_number: str):
         refuse(404, str(error))
     except (LookbackError, RepricingError) as error:
         refuse(422, "The lookback was refused.", [str(error)])
+    finally:
+        conn.close()
+
+
+@app.get("/accounts/{account_number}/anomalies")
+def get_account_anomalies(account_number: str):
+    conn = db.connect(target(), readonly=True)
+    try:
+        result = account_anomalies(conn, account_number)
+        weather = weather_check.load_default_weather()
+        if weather is not None:
+            result = weather_check.annotate(result, weather)
+        return _plain(result)
+    except AnomalyAccountNotFound as error:
+        refuse(404, str(error))
+    except (AnomalyError, RepricingError, weather_check.WeatherError) as error:
+        refuse(422, "The anomaly scan was refused.", [str(error)])
     finally:
         conn.close()
 

@@ -1053,3 +1053,64 @@ path (`parse_rider`, unchanged, through a thin `rider_adapter`), and a deliberat
 non-conforming stub (writes an `active` version, no citations, not idempotent) fails with
 clauses (i), (ii), (iv) and (v). The contract is therefore not PDF-shaped: it constrains
 what lands in the database, not how the source is read.
+
+## Stage 9 — B11 + B12: anomaly detection and weather normalisation
+
+Flags are **for review, never verdicts**: none of them asserts a billing error, and the
+report says so. Both modules are read-only over stored bills.
+
+### B11 — flag rules (`src/anomaly.py`)
+
+`account_anomalies(conn, account_number)` walks the account's bills in period order and
+computes per bill kWh, total billed and the implied unit cost (`total_billed / kWh`, Decimal,
+six places). Thresholds are named constants and function parameters, and every result states
+them:
+
+| Flag | Rule | Default |
+|---|---|---|
+| `unit_cost_jump` | unit cost deviates from the median unit cost of the trailing same-schedule bills by more than the threshold (strict `>`, either direction); needs a minimum baseline | `UNIT_COST_DEVIATION` 20%, `TRAILING_WINDOW` 6 bills, `MIN_BASELINE_BILLS` 3 |
+| `usage_spike` | kWh changes by more than the threshold vs the previous bill while the schedule is unchanged (increase or decrease, direction recorded) | `USAGE_CHANGE` 50% |
+| `schedule_change` | informational: the schedule differs from the previous bill | — |
+
+Comparisons never cross schedules: the unit-cost baseline is the last six bills of the *same*
+schedule, so the first bills after a change have no baseline and are not flagged. Each flag
+carries a reason sentence and the numbers behind it.
+
+### B12 — degree-day method (`src/weather_check.py`)
+
+Input is a daily mean-temperature series (°F). Per bill period (`bill_from` through `bill_to`
+inclusive) CDD = Σ max(0, T − 65) and HDD = Σ max(0, 65 − T); the base temperature is a
+parameter. A period with any missing day has no degree days and its spikes stay
+`unexplained`. `annotate(anomalies, weather)` returns a copy (input untouched) with degree
+days per bill and the quartiles across the account's periods (Q1, median, Q3 by linear
+interpolation, stated in the output). A `usage_spike` **increase** whose period degree days
+(CDD + HDD) are at or above Q3 is marked `weather_consistent`; otherwise `unexplained`. A
+decrease is never marked weather-consistent. The annotation is context: longer bill periods
+accumulate more degree days, and a "consistent" spike is not thereby proven correct.
+
+The live series comes from the Open-Meteo archive (no key), fetched once by
+`python src/weather_check.py --start … --end … --lat … --lon …` into
+`data/external/weather-daily.json` (gitignored). The API includes the annotation when that
+file is present and omits it otherwise.
+
+### API and CLI
+
+`GET /accounts/{account_number}/anomalies` (money and unit costs as strings; 404 unknown
+account, 422 refusal). `python src/anomaly.py --account N` prints the flags and writes
+`data/reports/<account>-anomalies.md`.
+
+### Era-change caveat
+
+Bills before Jul 2025 were billed under tariff versions that are not loaded, and the account
+moved from Schedule 110 to 120 in Sep 2024. Each bill row records whether a covering tariff
+version is loaded (`tariff_version_loaded`); a `unit_cost_jump` on an uncovered bill carries an
+`era_note`, because a shift across tariff eras is an era change, not an error. The report also
+repeats this as a standing caveat.
+
+### Live outcome
+
+On account 001172485896 (31 bills): 0 bills flagged for review; 1 informational
+`schedule_change` (bill 19, period ending 2024-10-11, 110 → 120). The nearest calls were far
+from the thresholds (largest same-schedule kWh change 28.8%; largest unit-cost deviation 8.4%;
+unit cost range $0.129050–$0.146961/kWh). With no spikes there was nothing to weather-annotate;
+the degree-day quartiles were computed for all 31 periods (Q1 188.3, median 340.9, Q3 486.9).

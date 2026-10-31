@@ -1114,3 +1114,57 @@ On account 001172485896 (31 bills): 0 bills flagged for review; 1 informational
 from the thresholds (largest same-schedule kWh change 28.8%; largest unit-cost deviation 8.4%;
 unit cost range $0.129050–$0.146961/kWh). With no spikes there was nothing to weather-annotate;
 the degree-day quartiles were computed for all 31 periods (Q1 188.3, median 340.9, Q3 486.9).
+
+## Stage 10 — B14: multi-site portfolio view
+
+A `sites` table (additive `CREATE TABLE IF NOT EXISTS` in `src/create_db.py`; id, name,
+`account_number` UNIQUE with a foreign key to `accounts`, note, created_at) registers the
+accounts the portfolio tracks. `src/portfolio.py` provides:
+
+- `register_site(conn, name, account_number, note=None)` — refuses a blank name, an unknown
+  account number, and an account that is already registered.
+- `portfolio_ranking(conn)` — per site, from the stored audit runs through the account
+  lookback (`src/lookback.py`): bills audited, total billed and total recomputed
+  (like-for-like), total overcharged (per-bill billed − recomputed, counted only when
+  positive) and the worst single-bill overcharge with its bill id. Sites are ranked by total
+  overcharged descending; at equal totals an audited site precedes a site with no audits, then
+  name order. A site with no audited bills is listed with zeros and a `no_audits` note — never
+  dropped, never estimated. The ranking runs no audits and writes nothing.
+
+API: `GET /portfolio` (money as strings) and `POST /sites` (JSON body; 422 with a failure list
+for a duplicate or unknown account). CLI: `python src/portfolio.py [--register "Name|account|note"]`
+prints the ranking and writes `data/reports/portfolio-ranking.md`.
+
+Live: one site, "New Kent (VEPGA)" (account 001172485896): 3 audited bills, billed
+$311.87 = recomputed $311.87, $0.00 overcharged (the three pilot totals $95.75 + $101.67 +
+$114.45).
+
+## Path C — decision
+
+Path C is decided: this is a **personal portfolio engine** — tariffs parsed from source
+documents, bills audited against them with citations, and a review loop that keeps a human in
+charge of anything uncertain. OpenTariff remains a possible future contribution (the parser
+contract of Stage 8 is the intended seam); nothing in the engine depends on it.
+
+## Continuation complete
+
+Stages 1–9 and 5.5 plus this stage extend the Phase 1–8 build. Suite counts (local-only,
+cumulative) as each stage closed:
+
+| Stage | Scope | Suite |
+|---|---|---|
+| 1 | B1 evidence citations on all 448 components | 228 |
+| 2 | B2 audit report (Markdown, reconciliation guard, endpoint) | 235 |
+| 3 | B16 all-schedule repricing, human review, comparison | 259 |
+| 4 | Web UI (single static page; no backend change) | 259 |
+| 5 | B3 tariff diff + B4 change alerts | 270 |
+| 6 | B5 back-bill lookback + B6 line-item validation | 281 |
+| 5.5 | Version lifecycle (`superseded`) | 283 |
+| 7 | B7 URDB reconciliation | 294 |
+| 8 | B9 parse-review queue + B15 parser contract | 319 |
+| 9 | B11 anomaly detection + B12 weather check | 334 |
+| 10 | B14 portfolio view | 343 |
+
+Standing limits: only Amendment 12 is loaded, so lookback, diff alerts and anomaly era checks
+grow useful as historical and later versions are loaded; the engine does not evaluate tiered
+`usd_per_kw` groups or `usd_per_rkva`; the API is single-user and unauthenticated by design.

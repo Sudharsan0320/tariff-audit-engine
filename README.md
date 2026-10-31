@@ -122,5 +122,23 @@ python src/audit_bills.py
   `cp .env.example .env && docker compose up -d`, then
   `docker compose run --rm api python src/run_pipeline.py` and open
   `http://127.0.0.1:8000/`.
-- Next: make the Path C decision — keep this as a personal portfolio engine
-  or point it at OpenTariff — now that the thin slice is working end to end.
+- Path C is decided: a personal portfolio engine (OpenTariff stays a possible
+  future contribution). Later work is recorded below.
+
+## Post-roadmap continuation
+
+Each stage is documented in [`docs/tariff-extraction-design.md`](docs/tariff-extraction-design.md).
+
+- B1 — evidence citations: every tariff component carries its source page and cell.
+- B2 — audit report: a deterministic Markdown report per audit run, with a reconciliation guard.
+- B16 — all-schedule repricing, a human review step for schedule choice, and a side-by-side comparison.
+- Web UI — one dark, keyboard-driven page for tariffs, bills, audits, schedule review and uploads.
+- B3 + B4 — tariff version diff and change alerts with a sample-bill impact.
+- Lifecycle fix — a replaced version becomes `superseded`, so a schedule can be re-versioned repeatedly.
+- B5 + B6 — back-bill lookback over stored audits and line-item validation flags.
+- B7 — reconciliation of parsed rates against the public URDB dataset (live run: zero counterparts, as expected for these schedules).
+- B9 + B15 — parse-review queue for shaky parse results, and a tested contract every parser adapter must meet (a CSV adapter proves it).
+- B11 + B12 — anomaly flags (unit cost, usage, schedule change) with degree-day weather context.
+- B14 — multi-site portfolio ranking by total overcharged.
+
+Final suite: 343 tests, all passing (local-only).

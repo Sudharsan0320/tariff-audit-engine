@@ -250,6 +250,19 @@ CREATE TABLE IF NOT EXISTS parse_review_items (
 );
 """)
 
+# --- sites: the portfolio registry, one row per tracked account (B14) ---
+# Additive: CREATE TABLE IF NOT EXISTS upgrades existing databases in place.
+cur.execute("""
+CREATE TABLE IF NOT EXISTS sites (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    account_number TEXT NOT NULL UNIQUE,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_number) REFERENCES accounts(account_number)
+);
+""")
+
 conn.commit()  # commit() SAVES all changes into the file; without it, everything above is thrown away when you close
 conn.close()  # close() ends the connection, freeing it up
 print(f"Database created: {db.describe(DB_TARGET)}")  # print() shows text on screen; confirms the script finished

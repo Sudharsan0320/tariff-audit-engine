@@ -35,6 +35,7 @@ try:
     from src.anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
     from src.lookback import AccountNotFound, LookbackError, account_lookback
     from src import weather_check
+    from src.portfolio import PortfolioError, portfolio_ranking, register_site
     from src.parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
     from src.parse_rider import parse_rider
     from src.schedule_comparison import (
@@ -67,6 +68,7 @@ except ImportError:
     from anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
     from lookback import AccountNotFound, LookbackError, account_lookback
     import weather_check
+    from portfolio import PortfolioError, portfolio_ranking, register_site
     from parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
     from parse_rider import parse_rider
     from schedule_comparison import (
@@ -198,6 +200,34 @@ def get_account_anomalies(account_number: str):
         refuse(422, "The anomaly scan was refused.", [str(error)])
     finally:
         conn.close()
+
+
+class SiteBody(BaseModel):
+    name: str
+    account_number: str
+    note: Optional[str] = None
+
+
+@app.get("/portfolio")
+def get_portfolio():
+    conn = db.connect(target(), readonly=True)
+    try:
+        return _plain(portfolio_ranking(conn))
+    except (db.Error, ValueError) as error:
+        refuse(422, "The portfolio was refused.", [str(error), "Run create_db to add the sites table."])
+    finally:
+        conn.close()
+
+
+@app.post("/sites")
+def post_site(body: SiteBody):
+    try:
+        with db.connect(target()) as conn:
+            return _plain(register_site(conn, body.name, body.account_number, body.note))
+    except PortfolioError as error:
+        refuse(422, "The site was refused.", [str(error)])
+    except db.Error as error:
+        refuse(422, "The site was refused.", [str(error), "Run create_db to add the sites table."])
 
 
 @app.get("/bills/{bill_id}/line-validation")

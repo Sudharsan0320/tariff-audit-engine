@@ -309,6 +309,24 @@ def _covering_version(conn, code, bill, identity):
         raise RepricingError(f"Version resolution for {code!r} failed: {message}") from error
 
 
+def _version_for(conn, code, bill, identity, pins):
+    """The period's covering version, or the pinned version when one is given."""
+    if not pins or code not in pins:
+        return _covering_version(conn, code, bill, identity)
+    cursor = conn.execute(
+        """
+        SELECT id, state, utility, schedule_code, version,
+               effective_from, effective_to, status
+        FROM tariff_versions WHERE id = ?
+        """,
+        (pins[code],),
+    )
+    row = cursor.fetchone()
+    if row is None or row[3] != code:
+        raise RepricingError(f"Pinned version {pins[code]} is not a version of {code!r}.")
+    return dict(zip([column[0] for column in cursor.description], row))
+
+
 def _base_schedules(conn, identity):
     cursor = conn.execute(
         """
@@ -370,10 +388,10 @@ def _engine(call, what):
         raise RepricingError(f"Engine failed unexpectedly on {what}: {error}") from error
 
 
-def _price_candidate(conn, bill, history, identity, code, rider_codes):
+def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None):
     selection = {}
     version = None
-    base_version = _covering_version(conn, code, bill, identity)
+    base_version = _version_for(conn, code, bill, identity, pins)
     if base_version is None:
         return _blocked_candidate(
             code,
@@ -394,7 +412,7 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes):
         riders = []
         riders_excluded = []
         for rider_code in rider_codes:
-            rider_version = _covering_version(conn, rider_code, bill, identity)
+            rider_version = _version_for(conn, rider_code, bill, identity, pins)
             if rider_version is None:
                 raise _Blocked(
                     NO_COVERING_VERSION,
@@ -511,6 +529,14 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes):
         "riders_excluded": riders_excluded,
         "notes": notes,
     }
+
+
+def price_schedule(conn, bill, history, identity, code, pins=None):
+    """One candidate for one schedule; `pins` maps a schedule or rider code to a version id."""
+    if not bill.get("schedule_code"):
+        raise RepricingError(f"Bill {bill.get('id')} has no stored schedule code.")
+    rider_codes = _billed_rider_codes(conn, bill, identity)
+    return _price_candidate(conn, bill, history, identity, code, rider_codes, pins)
 
 
 def reprice(conn, bill, history, identity):

@@ -834,3 +834,60 @@ bill that carries a demand determinant raises `RepricingError`. This is future
 engine work; bills without a demand determinant (including the October 2025
 pilot bill) are unaffected. Pre-Amendment-12 bills have no covering version and
 report `no_covering_version` for every schedule.
+
+## Stage 5 — B3 + B4: tariff diff and change alerts
+
+**Scope note (honest).** The live data holds exactly one version per schedule
+(Amendment 12). No real version pair exists yet, so B3 and B4 are proven on
+crafted fixture versions and on a scratch database; nothing was added to the
+primary database. Live alerts begin with the first real version pair — the next
+amendment loaded and activated.
+
+**B3 — `src/tariff_diff.py`.** `diff_versions(conn, old_id, new_id)` is a pure
+function of stored data. It refuses versions of different schedules (or
+state/utility), identical ids, unknown ids, and any version whose components
+share a natural key (ambiguous). Components are matched on `(component_type,
+unit, variant, billing_class, season, tier_min, tier_max, billing_category)`.
+Output, deterministically ordered: `added`, `removed`, `rate_changed` (old, new,
+delta; Decimal), `formula_changed`, a rules diff (added/removed by
+`rule_type` + `rule_text`), both versions' metadata, and each changed row's
+old/new citation (`source_page`, `source_cell`). A component whose only
+difference is its citation is not a change.
+
+**B4 — `src/tariff_alerts.py`.** `build_alert(conn, old, new, sample_bill_id)`
+returns Markdown: header (schedule, old → new version, effective dates), the
+changes list, and the sample bill repriced under each version — the schedule
+plus the same in-force riders that were billed, through the Stage 3 repricing
+path. It uses no wall clock, so an alert is reproducible. Repricing gained an
+optional version pin (`price_schedule(..., pins={code: version_id})`); without a
+pin the code path is the one Stage 3 already used (covered by tests asserting
+identical candidates). A pin bypasses the period-covering check for that code
+only, so a bill predating the new version can still be used as the sample; riders
+still resolve for the bill's own period. For a rider version pair the bill's
+billed schedule is repriced with that rider pinned. If either side of the
+repricing reduces to a reason, the alert states the reason and shows no partial
+total. CLI: `python src/tariff_alerts.py --old A --new B --bill N` writes
+`data/reports/<schedule>-v<old>-to-v<new>-alert.md` (gitignored).
+
+**Rounding.** The engine rounds each line half-up to cents, so the impact is the
+difference of rounded line amounts, which can differ by a cent from
+(new rate − old rate) × determinant. Example: 0.0167 → 0.0177 on 884 kWh is
+0.884 unrounded, but 14.76 → 15.65 per line, i.e. +0.89.
+
+**Activation hook.** `activate_with_alert` (used by the API and the CLI) activates
+and then, if a previous version of the same schedule exists, writes that alert
+with the most recent bill on that schedule as the sample (diff-only when no such
+bill exists). An alert failure never fails the activation; it is returned as a
+`warnings` entry in the response (`alert_path` is null).
+
+**API.** `GET /tariff-versions/{new_id}/diff?against={old_id}` (JSON, money as
+strings) and `GET /tariff-versions/{new_id}/alert?against={old_id}&bill={id}`
+(`text/markdown`); 404 for an unknown version or bill, 422 with a `failures`
+list for a refused pair or an uncomputable alert. `POST
+/tariff-versions/{id}/activate` now also returns `alert_path` and `warnings`.
+
+**Known pre-existing limit (not changed here).** `activate_version` counts every
+row with `status = 'active'` for a schedule, and a superseded version keeps that
+status (only `effective_to` is set). Activating a third version of one schedule
+is therefore refused ("Found 2 active versions"). The first real pair works;
+the lifecycle needs a `superseded` status before a third amendment.

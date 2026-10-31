@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 try:
     from src import db
-    from src.activate_version import activate_version
+    from src.activate_version import activate_with_alert
     from src.audit_bills import run_audits
     from src.audit_report import (
         AuditReportError,
@@ -44,10 +44,12 @@ try:
         record_decision,
         select_schedule,
     )
+    from src.tariff_alerts import AlertError, build_alert
+    from src.tariff_diff import DiffError, diff_versions
     from src.validate_draft import validate_drafts
 except ImportError:
     import db
-    from activate_version import activate_version
+    from activate_version import activate_with_alert
     from audit_bills import run_audits
     from audit_report import (
         AuditReportError,
@@ -69,6 +71,8 @@ except ImportError:
         record_decision,
         select_schedule,
     )
+    from tariff_alerts import AlertError, build_alert
+    from tariff_diff import DiffError, diff_versions
     from validate_draft import validate_drafts
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -307,10 +311,48 @@ def audit_bill(bill_id: int):
 def activate(version_id: int):
     try:
         with db.connect(target()) as conn:
-            activate_version(conn, version_id)
+            outcome = activate_with_alert(conn, version_id)
     except ValueError as error:
         refuse(422, "Activation refused.", [str(error)])
-    return {"version_id": version_id, "status": "active"}
+    return {
+        "version_id": version_id,
+        "status": "active",
+        "alert_path": outcome["alert_path"],
+        "warnings": outcome["warnings"],
+    }
+
+
+def _version_or_404(version_id):
+    if not query("SELECT 1 AS x FROM tariff_versions WHERE id = ?", (version_id,)):
+        refuse(404, f"No tariff version {version_id}.")
+
+
+@app.get("/tariff-versions/{new_id}/diff")
+def get_version_diff(new_id: int, against: int):
+    _version_or_404(new_id)
+    _version_or_404(against)
+    conn = db.connect(target(), readonly=True)
+    try:
+        return _plain(diff_versions(conn, against, new_id))
+    except DiffError as error:
+        refuse(422, "The version diff was refused.", [str(error)])
+    finally:
+        conn.close()
+
+
+@app.get("/tariff-versions/{new_id}/alert")
+def get_version_alert(new_id: int, against: int, bill: int):
+    _version_or_404(new_id)
+    _version_or_404(against)
+    _bill_or_404(bill)
+    conn = db.connect(target(), readonly=True)
+    try:
+        markdown = build_alert(conn, against, new_id, bill)
+    except (AlertError, RepricingError) as error:
+        refuse(422, "The change alert was refused.", [str(error)])
+    finally:
+        conn.close()
+    return Response(content=markdown, media_type="text/markdown")
 
 
 @app.post("/uploads/bill")

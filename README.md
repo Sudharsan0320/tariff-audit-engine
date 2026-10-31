@@ -97,5 +97,13 @@ python src/audit_bills.py
   eligibility is not established, so no cheaper-rate flag is raised. A
   separate price-anomaly check is unavailable because stored bill lines do
   not include printed unit rates.
+- Phase 7: complete. One command, `python src/run_pipeline.py`, builds the
+  whole database from the checked-in [`pipeline-manifest.json`](docs/pipeline-manifest.json)
+  (schema, parse, rules, validate, activate, ingest, enrich, audit), stops at
+  the first failing stage, and writes a JSON run record to `data/logs/`. A
+  re-run changes nothing: a fresh build matches the live database's content
+  (surrogate ids, timestamps, superseded audit history, and the legacy
+  `usage_accounts` row excluded), and a run against the live database was a
+  verified no-op. `--stage`, `--from-stage`, and `--dry-run` are available.
 - Next: make the Path C decision — keep this as a personal portfolio engine
   or point it at OpenTariff — now that the thin slice is working end to end.

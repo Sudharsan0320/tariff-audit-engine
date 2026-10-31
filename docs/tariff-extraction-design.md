@@ -475,3 +475,129 @@ functional category are 51 billing/audit, 64 usage ingestion/gate, 42 tariff
 validation/activation/rule loading, 30 parser, 3 schedule normalization, and
 one end-to-end integration case. The tests remain local-only; CI and automated
 mutation/property-based tooling remain out of scope.
+
+## Phase 7 — Pre-orchestrator named steps (from the 7a audit)
+
+Step 7a re-ran every stage against a copy of the fully-active database and
+found four defects/gaps. Each was fixed as its own named step before the
+orchestrator (7b); the live `tariffs.db` was touched only by step P4.
+
+- **P1 — Parsers are idempotent on active state.** `parse_schedule` and
+  `parse_rider_gen` previously matched only `status = 'draft'`, so an active
+  version made them insert a duplicate draft. They now match the version
+  identity in any status and print `already <status>, skipped` (exit 0).
+- **P2 — Zero matched pages is an error.** `parse_schedule <code>` exits 1 and
+  writes nothing when no page matches (previously it created an empty draft and
+  exited 0). The parser has no exceptions; RG-CM (the only zero-page code, 0
+  components and 1 rule, confirmed against the PDF) is created by a separate
+  stage, `src/create_cross_reference_versions.py`, driven by the inventory's
+  `cross_reference_schedules` key.
+- **P3 — Database location.** Every stage honors `TARIFF_DB_PATH` when set;
+  unset, behavior is unchanged.
+- **P4 — `bills.source_file` is project-relative.** The loader normalizes any
+  path spelling to the project-relative POSIX form
+  (`parse_usage.canonical_source_path`). `src/migrate_source_file_paths.py`
+  migrated the live database once: backup first, one transaction, 31 bill
+  rows rewritten, and the 3 current-mapping (`phase5-v3`) `audit_runs.input_hash`
+  values recomputed with `audit_bills`' own function (v1/v2 runs untouched;
+  `result_hash` and `tariff_snapshot_hash` verified unchanged or abort).
+  Proof: `audit_bills` immediately after = 3 × `no-op`, 9 audit runs; re-ingest
+  of the EAP by relative or absolute path = `no-op`; migration re-run = 0 changes.
+  The migration deliberately changed the database file hash
+  (`abc91eed…9218` → `cc765bf3…c6eb`); backup kept as
+  `data/tariffs.db.pre-source-file-migration.<stamp>.bak`.
+
+Suite after P1–P4: 198 passed (197 unit, 1 integration). 7d comparison scope
+(ratified): all tables, timestamp columns excluded, excluding only
+superseded-mapping audit rows (v1/v2) and the legacy `usage_accounts` row,
+with the current-mapping audit rows asserted equal.
+
+## Phase 7 — Idempotent pipeline: stages, manifest, acceptance evidence
+
+### Stage table (`src/run_pipeline.py`)
+
+Each stage is an existing CLI run as a subprocess from the project root with
+`TARIFF_DB_PATH` pointing at the target database. A stage's effect is measured
+by a before/after content snapshot of the whole database (timestamp columns
+excluded); `rows changed` is, per table, the larger of rows added-or-modified
+and rows removed.
+
+| # | Stage | Commands | 7a classification | Re-run result |
+|---|---|---|---|---|
+| 1 | create_schema | `create_db.py` | safe as-is | no change |
+| 2 | parse_gen | `parse_rider_gen.py` | named fix P1 | no change (`already active, skipped`) |
+| 3 | parse_schedules | `parse_schedule.py <code>` per manifest | named fixes P1, P2 | no change |
+| 4 | create_cross_reference | `create_cross_reference_versions.py` | new stage (RG-CM) | no change |
+| 5 | parse_riders | `parse_rider.py <code>` per manifest | safe as-is | no change |
+| 6 | load_rules | `load_rules.py` | safe, orchestrator infers change from snapshot | no change |
+| 7 | validate | `validate_draft.py` | vacuous pass with no drafts | no change |
+| 8 | activate | gate `validate_draft.py`, then `activate_version.py <id>` per draft listed from the DB | orchestrator handling | no change; already-active versions are reported in notes |
+| 9 | ingest_bills | `ingest_usage_history.py <pdf>` per manifest | safe after P4 | no change |
+| 10 | enrich_determinants | `enrich_determinants.py <pdf>` per manifest (D3) | promoted Phase 5 backfill | no change |
+| 11 | audit | `audit_bills.py --mapping <manifest mapping>` | safe as-is | no change |
+
+The legacy scaffold `ingest_usage.py` is not a stage.
+
+### Manifest format (`docs/pipeline-manifest.json`)
+
+`tariff_pdfs` (amendment, rider_gen), `inventory`, `mapping`, `schedules`
+(ordered codes), `riders` (ordered codes), `usage_pdfs`. Order is significant:
+version ids follow parse order, and the lists reproduce the live ids
+(Rider GEN, 23 schedules, RG-CM from the cross-reference stage, 16 riders).
+Nothing is discovered from folders. The tariff parsers read fixed PDF paths;
+the manifest's `tariff_pdfs` entries are verified to exist (preflight) but
+are not yet passed to those parsers.
+
+### Run record (D2)
+
+One `data/logs/pipeline-<UTC stamp>.json` per run, success or failure:
+database, manifest and its SHA-256, selected stages, per-stage status and
+summary, commands with exit codes and output tails, rows changed per table,
+before/after content hashes, and a `failure` block (stage, command, exit code,
+reason). Failure output printed to the console is the last six lines.
+
+### 7c — enrichment and activation (on copies)
+
+- Deleting all `bill_determinants` and running `--stage enrich_determinants`
+  restored 96 rows; the whole-database content hash returned to the fresh-build
+  value and accounts/bills/bill_charges hashes were unchanged.
+- With one invalid component and all 41 versions reset to draft, the activate
+  stage failed at its validation gate and all 41 versions stayed draft.
+- From drafts, a full run ends with 41 active; from all-active, a run is a no-op.
+
+### 7d — fresh-build acceptance
+
+A full run against an empty database (about 3 minutes, dominated by PDF
+parsing) produced the golden state: 41 active versions, 448 components, 112
+rules, 31 bills, 894 charges, 96 determinants, 3 current-mapping audit runs
+with 96 lines. A second run reported `no change` for all 11 stages with an
+identical content hash.
+
+`src/compare_databases.py` compares a fresh build to the live database. The
+documented exclusions (ratified): timestamp columns; surrogate ids of
+`tariff_components`, `audit_runs`, `audit_lines` (live component ids run to
+1487 with gaps from earlier re-parses, a rebuild numbers them 1–448;
+component references in audit lines are compared by component content);
+audit runs of superseded mapping versions and the legacy `usage_accounts`
+row; and the hashes that embed component ids (`tariff_snapshot_hash`,
+`input_hash`, `result_hash`, and their keys in `report_json`). Result: every
+compared table equal, identical content hashes on both sides. **Phase 8 item:**
+the tariff snapshot hash depends on surrogate component ids, so audit
+hashes are not portable across databases.
+
+### 7e — sabotage, resume, live run
+
+- Sabotage: on an empty database the manifest's usage PDF pointed at a
+  truncated copy. The pipeline stopped at `ingest_bills` (exit 1), named the
+  stage and command, left the 41 active versions intact, and `enrich_determinants`
+  and `audit` were `not run` (0 bills, 0 determinants, 0 audit runs).
+- Resume: the manifest was corrected and the same command re-run. The first
+  eight stages reported no change, ingestion and audit completed, and the
+  result compared EQUAL to the live database.
+- Live: `python src/run_pipeline.py` against `data/tariffs.db`: every stage
+  `done (no change)`, content hash `bffd4ebd…` before and after, and the file
+  SHA-256 `cc765bf3…c6eb` unchanged.
+
+Suite after Phase 7: 207 passed (206 unit, 1 integration), local-only.
+Out of scope and untouched: scheduling/CI, external orchestrators, Postgres,
+parallelism, ingesting new accounts, scaffold cleanup.

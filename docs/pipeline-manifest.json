@@ -1,0 +1,21 @@
+{
+  "description": "Inputs for the idempotent tariff-audit pipeline. Order is significant: version ids are assigned in this order. Nothing is discovered from folders.",
+  "tariff_pdfs": {
+    "amendment": "data/raw/VEPGA-Amendment-12-Effective-July-1-2025.pdf",
+    "rider_gen": "data/raw/rider-gen.pdf"
+  },
+  "inventory": "docs/tariff-rules-inventory.json",
+  "mapping": "docs/bill-label-mapping.json",
+  "schedules": [
+    "120", "110", "100", "102", "130", "131", "134", "132", "150", "151",
+    "154", "153", "152", "SMH", "SSL", "A", "B", "C", "D", "E",
+    "SGCM", "SGCM-1", "SP"
+  ],
+  "riders": [
+    "A", "CCR-CM", "RPS-CM", "PIPP-CM", "T-CM", "GEN-CM", "DIST-CM",
+    "CE-CM", "OSW-CM", "SNA-CM", "E-CM", "RBB-CM", "SMR-CM", "G-CM", "K", "L"
+  ],
+  "usage_pdfs": [
+    "data/raw/1172485896__EAP_Report.pdf"
+  ]
+}

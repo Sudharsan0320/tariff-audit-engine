@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tariff Audit Engine</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { margin-bottom: 0; }
+  .sub { color: #666; margin-top: .2rem; }
+  section { border: 1px solid #ccc; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+  label { display: block; margin: .4rem 0; }
+  button { padding: .4rem .9rem; }
+  .ok { color: #0a6b2d; } .err { color: #a11; }
+  pre { background: #f5f5f5; padding: .6rem; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; margin-top: .6rem; }
+  th, td { border: 1px solid #ddd; padding: .3rem .5rem; text-align: left; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.bad td { background: #fdecec; }
+</style>
+</head>
+<body>
+<h1>Tariff Audit Engine</h1>
+<p class="sub">Local single-user tool &middot; <a href="/docs">API explorer</a></p>
+
+<section>
+  <h2>Upload a tariff PDF</h2>
+  <form id="tariff-form">
+    <label>Kind
+      <select name="kind"><option>schedule</option><option>rider</option></select></label>
+    <label>Code (e.g. 110 or T-CM) <input name="code" required></label>
+    <label>PDF <input type="file" name="file" accept="application/pdf" required></label>
+    <button>Upload tariff</button>
+  </form>
+  <div id="tariff-result"></div>
+</section>
+
+<section>
+  <h2>Upload a bill PDF (Dominion EAP history)</h2>
+  <form id="bill-form">
+    <label>PDF <input type="file" name="file" accept="application/pdf" required></label>
+    <button>Upload bill history</button>
+  </form>
+  <div id="bill-result"></div>
+</section>
+
+<section>
+  <h2>Bill audit</h2>
+  <label>Bill <select id="bill-picker"></select></label>
+  <button id="audit-run">Run audit</button>
+  <div id="audit-result"></div>
+</section>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function show(el, ok, body) {
+  el.innerHTML = `<p class="${ok ? "ok" : "err"}">${ok ? "Accepted" : "Refused"}: ${esc(body.message || body.status || "")}</p>`
+    + (body.failures && body.failures.length ? `<ul>${body.failures.map(f => `<li>${esc(f)}</li>`).join("")}</ul>` : "")
+    + `<pre>${esc(JSON.stringify(body, null, 2))}</pre>`;
+}
+
+async function submit(form, url, el) {
+  const response = await fetch(url, { method: "POST", body: new FormData(form) });
+  const body = await response.json();
+  show(el, response.ok, response.ok ? body : (body.detail || body));
+  if (response.ok) loadBills();
+}
+
+document.getElementById("tariff-form").addEventListener("submit", e => {
+  e.preventDefault();
+  submit(e.target, "/uploads/tariff", document.getElementById("tariff-result"));
+});
+document.getElementById("bill-form").addEventListener("submit", e => {
+  e.preventDefault();
+  submit(e.target, "/uploads/bill", document.getElementById("bill-result"));
+});
+
+async function loadBills() {
+  const bills = await (await fetch("/bills")).json();
+  document.getElementById("bill-picker").innerHTML = bills.map(b =>
+    `<option value="${esc(b.id)}">#${esc(b.id)} ${esc(b.bill_from)} to ${esc(b.bill_to)} (${esc(b.schedule_code)})</option>`).join("");
+}
+
+function renderAudit(el, audit) {
+  if (!audit.runs.length) { el.innerHTML = "<p>No audit yet for this bill. Press Run audit.</p>"; return; }
+  el.innerHTML = audit.runs.map(run => `
+    <h3>Audit run ${esc(run.id)} &middot; mapping ${esc(run.mapping_version)}</h3>
+    <table><tr><th>Label</th><th class="num">Billed</th><th class="num">Expected</th><th>Verdict</th></tr>
+    ${run.lines.map(l => `<tr class="${/^(OVER|UNDER|MISSING|ZERO)/.test(l.verdict) ? "bad" : ""}">
+      <td>${esc(l.line_label)}</td><td class="num">${esc(l.billed_amount)}</td>
+      <td class="num">${esc(l.expected_amount)}</td><td>${esc(l.verdict)}</td></tr>`).join("")}
+    </table>`).join("");
+}
+
+async function loadAudit(run) {
+  const id = document.getElementById("bill-picker").value;
+  const el = document.getElementById("audit-result");
+  if (!id) return;
+  const response = await fetch(`/bills/${id}/audit`, { method: run ? "POST" : "GET" });
+  const body = await response.json();
+  if (response.ok) renderAudit(el, body); else show(el, false, body.detail || body);
+}
+
+document.getElementById("bill-picker").addEventListener("change", () => loadAudit(false));
+document.getElementById("audit-run").addEventListener("click", () => loadAudit(true));
+loadBills().then(() => loadAudit(false));
+</script>
+</body>
+</html>

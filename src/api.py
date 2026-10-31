@@ -1,0 +1,265 @@
+"""HTTP API over the tariff audit engine (Phase 8d).
+
+No business logic lives here: reads are plain SELECTs, actions call the same
+functions the pipeline stages use, and every gate refusal is returned as a 4xx
+carrying the actual failure list. The database is chosen by TARIFF_DB_URL /
+TARIFF_DB_PATH exactly like the stages. Posture (E5): local single-user tool,
+no authentication, bind to localhost.
+"""
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+
+try:
+    from src import db
+    from src.activate_version import activate_version
+    from src.audit_bills import run_audits
+    from src.ingest_usage_history import ingest_usage_pdf
+    from src.parse_rider import parse_rider
+    from src.validate_draft import validate_drafts
+except ImportError:
+    import db
+    from activate_version import activate_version
+    from audit_bills import run_audits
+    from ingest_usage_history import ingest_usage_pdf
+    from parse_rider import parse_rider
+    from validate_draft import validate_drafts
+
+ROOT = Path(__file__).resolve().parents[1]
+UPLOAD_DIR = Path(os.environ.get("TARIFF_UPLOAD_DIR") or ROOT / "data" / "uploads")
+PAGE = ROOT / "src" / "static" / "index.html"
+
+app = FastAPI(title="Tariff Audit Engine", version="1.0")
+
+
+def target():
+    return db.default_target(ROOT / "data" / "tariffs.db")
+
+
+def query(sql, params=()):
+    """Run one read-only query and return a list of dicts."""
+    conn = db.connect(target(), readonly=True)
+    try:
+        cursor = conn.execute(sql, params)
+        names = [d[0] for d in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def refuse(status, message, failures=None, **extra):
+    detail = {"message": message, "failures": failures or []}
+    detail.update(extra)
+    raise HTTPException(status_code=status, detail=detail)
+
+
+def save_upload(upload: UploadFile):
+    data = upload.file.read()
+    if not data.startswith(b"%PDF"):
+        refuse(422, "The uploaded file is not a PDF.", ["File does not start with %PDF."])
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    safe = Path(upload.filename or "upload.pdf").name
+    path = UPLOAD_DIR / f"{hashlib.sha256(data).hexdigest()[:12]}-{safe}"
+    path.write_bytes(data)
+    return path
+
+
+# ---------------------------------------------------------------- reads
+@app.get("/health")
+def health():
+    try:
+        query("SELECT 1 AS ok")
+    except db.Error as error:
+        raise HTTPException(status_code=503, detail=f"database unavailable: {error}")
+    return {"status": "ok", "database": db.describe(target())}
+
+
+@app.get("/tariff-versions")
+def list_versions(status: Optional[str] = None, schedule_code: Optional[str] = None):
+    sql = "SELECT * FROM tariff_versions WHERE 1 = 1"
+    params = []
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    if schedule_code:
+        sql += " AND schedule_code = ?"
+        params.append(schedule_code)
+    return query(sql + " ORDER BY id", params)
+
+
+@app.get("/tariff-versions/{version_id}")
+def get_version(version_id: int):
+    versions = query("SELECT * FROM tariff_versions WHERE id = ?", (version_id,))
+    if not versions:
+        refuse(404, f"No tariff version {version_id}.")
+    return {
+        **versions[0],
+        "components": query(
+            "SELECT * FROM tariff_components WHERE tariff_version_id = ? ORDER BY id",
+            (version_id,),
+        ),
+        "rules": query(
+            "SELECT * FROM tariff_rules WHERE tariff_version_id = ? ORDER BY id",
+            (version_id,),
+        ),
+    }
+
+
+@app.get("/accounts")
+def list_accounts():
+    return query("SELECT * FROM accounts ORDER BY account_number")
+
+
+@app.get("/bills")
+def list_bills(account_number: Optional[str] = None):
+    sql = "SELECT * FROM bills"
+    params = []
+    if account_number:
+        sql += " WHERE account_number = ?"
+        params.append(account_number)
+    return query(sql + " ORDER BY bill_from, id", params)
+
+
+@app.get("/bills/{bill_id}")
+def get_bill(bill_id: int):
+    bills = query("SELECT * FROM bills WHERE id = ?", (bill_id,))
+    if not bills:
+        refuse(404, f"No bill {bill_id}.")
+    return {
+        **bills[0],
+        "charges": query("SELECT * FROM bill_charges WHERE bill_id = ? ORDER BY id", (bill_id,)),
+        "determinants": query(
+            "SELECT * FROM bill_determinants WHERE bill_id = ? ORDER BY id", (bill_id,)
+        ),
+    }
+
+
+def audit_view(bill_id):
+    runs = query("SELECT * FROM audit_runs WHERE bill_id = ? ORDER BY id", (bill_id,))
+    for run in runs:
+        run["report"] = json.loads(run.pop("report_json"))
+        run["lines"] = query(
+            "SELECT * FROM audit_lines WHERE audit_run_id = ? ORDER BY id", (run["id"],)
+        )
+        for line in run["lines"]:
+            line["detail"] = json.loads(line["detail"]) if line["detail"] else None
+    return {"bill_id": bill_id, "runs": runs}
+
+
+@app.get("/bills/{bill_id}/audit")
+def get_audit(bill_id: int):
+    if not query("SELECT 1 AS x FROM bills WHERE id = ?", (bill_id,)):
+        refuse(404, f"No bill {bill_id}.")
+    return audit_view(bill_id)
+
+
+# ---------------------------------------------------------------- actions
+@app.post("/bills/{bill_id}/audit")
+def audit_bill(bill_id: int):
+    if not query("SELECT 1 AS x FROM bills WHERE id = ?", (bill_id,)):
+        refuse(404, f"No bill {bill_id}.")
+    try:
+        with db.connect(target()) as conn:
+            result = run_audits(conn, bill_ids=[bill_id])
+    except ValueError as error:
+        refuse(422, "The audit was refused.", [str(error)])
+    return {"statuses": result["statuses"], **audit_view(bill_id)}
+
+
+@app.post("/tariff-versions/{version_id}/activate")
+def activate(version_id: int):
+    try:
+        with db.connect(target()) as conn:
+            activate_version(conn, version_id)
+    except ValueError as error:
+        refuse(422, "Activation refused.", [str(error)])
+    return {"version_id": version_id, "status": "active"}
+
+
+@app.post("/uploads/bill")
+def upload_bill(file: UploadFile = File(...)):
+    path = save_upload(file)
+    try:
+        with db.connect(target()) as conn:
+            draft, status, validation, _ = ingest_usage_pdf(conn, path)
+    except Exception as error:  # unreadable or non-EAP PDF: a refusal, not a server fault
+        refuse(422, "The bill PDF could not be parsed.", [f"{type(error).__name__}: {error}"])
+    if validation["failures"]:
+        refuse(
+            422,
+            "The usage gate refused this bill history.",
+            validation["failures"],
+            warnings=validation["warnings"],
+        )
+    return {
+        "status": status,
+        "account_number": draft.get("account", {}).get("account_number"),
+        "bills_in_file": len(draft.get("bills", [])),
+        "warnings": validation["warnings"],
+        "information": validation.get("information", []),
+    }
+
+
+@app.post("/uploads/tariff")
+def upload_tariff(
+    kind: str = Form(..., description="'schedule' or 'rider'"),
+    code: str = Form(..., description="Schedule or rider code, e.g. 110 or T-CM"),
+    file: UploadFile = File(...),
+):
+    if kind not in ("schedule", "rider"):
+        refuse(422, "kind must be 'schedule' or 'rider'.", [f"Got {kind!r}."])
+    path = save_upload(file)
+    if kind == "rider":
+        try:
+            version_id, count = parse_rider(code, pdf_path=path, database_path=target())
+        except Exception as error:
+            refuse(422, "The rider could not be parsed.", [f"{type(error).__name__}: {error}"])
+    else:
+        env = {k: v for k, v in os.environ.items() if k not in ("TARIFF_DB_URL", "TARIFF_DB_PATH")}
+        env["TARIFF_DB_URL" if db.is_postgres(target()) else "TARIFF_DB_PATH"] = str(target())
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "src" / "parse_schedule.py"), code, "--pdf", str(path)],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            lines = (result.stdout + result.stderr).strip().splitlines()
+            refuse(422, "The schedule could not be parsed.", lines[-5:])
+        wanted = code
+        found = query(
+            "SELECT id FROM tariff_versions WHERE schedule_code = ? ORDER BY id DESC", (wanted,)
+        )
+        if not found:
+            refuse(422, "The parser wrote no version.", [f"No version for {code}."])
+        version_id, count = found[0]["id"], None
+    with db.connect(target(), readonly=True) as conn:
+        version = conn.execute(
+            "SELECT status FROM tariff_versions WHERE id = ?", (version_id,)
+        ).fetchone()
+    if version and version[0] != "draft":
+        return {"version_id": version_id, "status": version[0], "note": "already active; nothing changed"}
+    with db.connect(target(), readonly=True) as conn:
+        failures = validate_drafts(conn, version_id)
+    if failures:
+        refuse(
+            422,
+            "The validation gate refused this draft; it stays a draft.",
+            failures,
+            version_id=version_id,
+        )
+    return {"version_id": version_id, "status": "draft", "components": count, "validated": True}
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(PAGE)

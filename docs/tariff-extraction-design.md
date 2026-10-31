@@ -319,24 +319,24 @@ requested.
 The August bill-to 2025-08-13 hand-check below uses the persisted tariff rates
 and determinants. Each expected amount is rounded at the line level:
 
-| Bill line | Database rate | Determinant | Expected |
-|---|---:|---:|---:|
-| Basic Cust. Charges | $7.59/month | flat | $7.59 |
-| Energy DIS | $0.01670/kWh | 731 total kWh | $12.21 |
-| On Peak Energy ESS | $0.04289/kWh | 289 on-peak kWh | $12.40 |
-| Off Peak Energy ESS | $0.02637/kWh | 442 off-peak kWh | $11.66 |
-| Transmission Energy | $0.018961/kWh | 731 total kWh | $13.86 |
-| Fuel Chg | $0.020968/kWh | 731 total kWh | $15.33 |
-| Rider CCR | $0.001242/kWh | 731 total kWh | $0.91 |
-| Rider CE kWh | $0.001673/kWh | 731 total kWh | $1.22 |
-| Rider DIST kWh | $0.004063/kWh | 731 total kWh | $2.97 |
-| Rider E kWh | $0.000730/kWh | 731 total kWh | $0.53 |
-| Rider GEN kWh | $0.004320/kWh | 731 total kWh | $3.16 |
-| Rider OSW KWh | $0.007003/kWh | 731 total kWh | $5.12 |
-| Rider RBB kWh | $0.000473/kWh | 731 total kWh | $0.35 |
-| Rider RPS | $0.008637/kWh | 731 total kWh | $6.31 |
-| Rider SMR KWh | $0.000222/kWh | 731 total kWh | $0.16 |
-| Rider SNA KWh | $0.002699/kWh | 731 total kWh | $1.97 |
+| Bill line | Hand calculation | Expected |
+|---|---:|---:|
+| Basic Cust. Charges | Flat monthly charge | $7.59 |
+| Energy DIS | 731 × $0.01670 = $12.20770 | $12.21 |
+| On Peak Energy ESS | 289 × $0.04289 = $12.39521 | $12.40 |
+| Off Peak Energy ESS | 442 × $0.02637 = $11.65554 | $11.66 |
+| Transmission Energy | 731 × $0.018961 = $13.860491 | $13.86 |
+| Fuel Chg | 731 × $0.020968 = $15.327608 | $15.33 |
+| Rider CCR | 731 × $0.001242 = $0.907902 | $0.91 |
+| Rider CE kWh | 731 × $0.001673 = $1.222963 | $1.22 |
+| Rider DIST kWh | 731 × $0.004063 = $2.970053 | $2.97 |
+| Rider E kWh | 731 × $0.000730 = $0.533630 | $0.53 |
+| Rider GEN kWh | 731 × $0.004320 = $3.157920 | $3.16 |
+| Rider OSW KWh | 731 × $0.007003 = $5.119193 | $5.12 |
+| Rider RBB kWh | 731 × $0.000473 = $0.345763 | $0.35 |
+| Rider RPS | 731 × $0.008637 = $6.313647 | $6.31 |
+| Rider SMR KWh | 731 × $0.000222 = $0.162282 | $0.16 |
+| Rider SNA KWh | 731 × $0.002699 = $1.972969 | $1.97 |
 
 The 16 direct amounts sum to $95.75. The printed bill total is $96.49; the
 $0.74 Virginia Tax Surcharge is itemized out of scope, leaving an exact
@@ -375,3 +375,103 @@ differences remain explicit OVER/UNDER misbill findings.
 The full test suite passes with `PYTHONPATH=. pytest -q`. July proration,
 tax calculation, contracted minimums, and pre-July 2025 bills remain outside
 Phase 5.
+
+## Phase 6 — Formal test evidence
+
+Phase 6 keeps tests local in the gitignored `tests/` directory. `pytest-cov`
+is installed only in the local virtualenv; no dependency manifest or
+production behavior changed. The 57-case organic baseline is now a
+191-case suite: 190 `unit` cases and one `integration` case.
+
+Commands:
+
+```sh
+# Full suite, including the temporary-database end-to-end path
+PYTHONPATH=. venv/bin/python -m pytest --cov=src --cov-report=term-missing -q
+
+# Fast unit-only suite
+PYTHONPATH=. venv/bin/python -m pytest -m unit -q
+
+# Slower local-PDF / temporary-database integration path
+PYTHONPATH=. venv/bin/python -m pytest -m integration -q
+```
+
+Final measured results: full suite **191 passed in 8.76s** with **90% total
+coverage**; unit-only **190 passed in 0.23s**; integration-only **1 passed in
+5.28s**.
+The core per-module coverage report is:
+
+| Module | Raw line coverage | Core-floor disposition |
+|---|---:|---|
+| `activate_version.py` | 69% | Core logic covered; raw shortfall is CLI entry-point glue. |
+| `audit_bills.py` | 90% | Meets the floor. |
+| `billing_engine.py` | 97% | Meets the floor. |
+| `create_db.py` | 95% | Meets the floor. |
+| `explore_amendment.py` | 0% | Named scratch-explorer exemption. |
+| `ingest_usage.py` | 64% | Core logic covered; raw shortfall is CLI entry-point glue. |
+| `ingest_usage_history.py` | 88% | Core logic covered; raw shortfall is CLI entry-point glue. |
+| `inspect_db.py` | 0% | CLI-only inspection utility. |
+| `load_rules.py` | 98% | Meets the floor; CLI entry point is tested. |
+| `normalize_schedule.py` | 100% | Meets the floor. |
+| `parse_account_profile.py` | 90% | Meets the floor. |
+| `parse_rider.py` | 93% | Meets the floor. |
+| `parse_rider_gen.py` | 94% | Meets the floor. |
+| `parse_schedule.py` | 91% | Meets the floor. |
+| `parse_usage.py` | 94% | Meets the floor. |
+| `read_pdf.py` | 0% | CLI-only PDF dump utility. |
+| `validate_draft.py` | 87% | Core logic covered; raw shortfall is CLI entry-point glue. |
+| `validate_usage.py` | 91% | Meets the floor. |
+
+`load_rules.py` retains one reviewed but unreachable duplicate-code check
+after an exact set-and-length check; the latter makes duplicates impossible
+to reach, and the module still measures 98%. The scratch explorer and
+CLI-only/entry-point lines are the named coverage exclusions. The local gap
+map in [`tests/phase6-gap-map.md`](../tests/phase6-gap-map.md) records the
+baseline inventory and the closed rule matrix.
+
+### Independent money witnesses
+
+The Phase 5 August table above records each printed line's rate × determinant
+product and its independently rounded amount. Additional cases were
+calculated before encoding as assertions:
+
+| Case | Hand arithmetic | Expected |
+|---|---|---:|
+| Demand-only synthetic | $2.50/kW × 3 kW = $7.50; $7.50 + $6.25 flat = $13.75 | $13.75 |
+| Schedule 110 marginal tiers | 300 kWh × $0.04677 + 300 × $0.03577 + 200 × $0.02940 = $30.642 | $30.64 |
+| Zero usage | 0 kWh × $0.01670 + $7.59 basic charge = $7.59 | $7.59 |
+| Half-cent, odd lower cent | $1.225 → ROUND_HALF_UP | $1.23 |
+| Half-cent, even lower cent | $1.235 → ROUND_HALF_UP | $1.24 |
+| August Energy DIS | 731 kWh × $0.01670 = $12.20770 | $12.21 |
+| August On Peak Energy ESS | 289 kWh × $0.04289 = $12.39521 | $12.40 |
+| August Off Peak Energy ESS | 442 kWh × $0.02637 = $11.65554 | $11.66 |
+
+The inclusive version-start, uncovered prior-day, and April Rider GEN v1
+boundary cases assert selection/refusal explicitly. The August table's 16
+line amounts sum to $95.75; August, September, and October pilot totals are
+$95.75, $101.67, and $114.45 respectively, each with a $0.00 like-for-like
+delta.
+
+### Golden path and mutation sanity
+
+The integration test rebuilds the schema and the entire parse → validate →
+activate → rules load → EAP ingest → pilot audit story under `tmp_path`, using
+the local source PDFs. Its assertions cover all 41 version component/rule
+counts, the 245/181/22 component split, 112 rules, 31 bills, 894 charges, and
+the three pilot totals. It hashes the live `tariffs.db` before and after and
+requires an unchanged hash.
+
+Three deliberate mutations were applied one at a time and restored; each
+targeted check went red for the intended reason:
+
+| Mutation | Test that caught it | Observed failure |
+|---|---|---|
+| Change August Energy DIS fixture rate from $0.01670 to $0.01671 | `test_august_direct_line_amounts_reproduce_hand_checked_fixture` | Hand amount changed from $12.21 to $12.22. |
+| Change engine rounding from `ROUND_HALF_UP` to `ROUND_HALF_EVEN` | `test_decimal_rounding_uses_half_up` | $1.225 became $1.22 instead of $1.23. |
+| Shift Schedule 110's 150 kWh/kW boundary to 151 | `test_tiered_evaluation_uses_stored_marginal_blocks` | Tier total changed from $30.64 to $30.66. |
+
+After restoration, the full suite returned to green. Final test counts by
+functional category are 51 billing/audit, 64 usage ingestion/gate, 42 tariff
+validation/activation/rule loading, 30 parser, 3 schedule normalization, and
+one end-to-end integration case. The tests remain local-only; CI and automated
+mutation/property-based tooling remain out of scope.

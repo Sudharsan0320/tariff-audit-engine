@@ -691,3 +691,41 @@ owner.
 
 Suite after Phase 8: 216 passed, local-only.
 
+
+## Stage 1 — B1: evidence citations
+
+Every `tariff_components` row now carries where its value came from.
+
+Decisions:
+
+- **F1 — two columns.** `source_page INTEGER` (1-based PDF page) and
+  `source_cell TEXT` (a human-checkable locator in the printed page's own terms).
+- **F2 — mandatory.** `validate_drafts` refuses activation when any component
+  lacks a positive `source_page` or a non-blank `source_cell`. Zero-component
+  (cross-reference) versions are unaffected.
+- **F3 — parsers only.** Citations enter by re-running the parsers through the
+  pipeline. No backfill script; the frozen `data/tariffs.db` is not overwritten
+  and stays without the columns (`create_db.py` adds them to older databases only
+  when it is run against them).
+- **F4 — no money moves.** Pilot totals stay $95.75 / $101.67 / $114.45.
+
+Locator formats (`src/citations.py`):
+
+| Parser | `source_page` | `source_cell` |
+| --- | --- | --- |
+| `parse_rider_gen` | 1 | `row "<schedule>", column "<header>", cell "<printed cell>"` |
+| `parse_rider` table riders | page of the table | `row "<rate schedule>", column "<nearest header to the left>", cell "<printed cell>"` |
+| `parse_rider` text riders (uniform, K, L, G-CM) | page where the rate sentence starts | `text "<rate sentence>"` |
+| `parse_schedule` line-based rates, lighting rows, matrix rows | page of the printed line | `line "<printed line holding the amount>"` |
+| `parse_schedule` prose schedules (B, C, D, E, SGCM) | page where the excerpt starts | `text "<excerpt containing the amount>"` |
+
+Where a cell-level location is unavailable (text-only PDF content) the locator is
+the page plus the matched printed text; nothing is inferred. A snippet that
+cannot be found on its page, or that appears on two pages, raises instead of
+guessing.
+
+Snapshot hash: `tariff_snapshot_hash` is computed over each component's natural
+content, which now includes the two new columns, so audits rebuilt after B1 have
+new hashes. This is the deliberate effect of adding evidence, not a drift.
+`compare_databases.py` includes the citation columns only under `--strict`,
+because the frozen SQLite artifact predates them.

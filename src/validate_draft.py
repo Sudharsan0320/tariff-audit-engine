@@ -95,7 +95,7 @@ def validate_drafts(conn, version_id=None):
             f"""
             SELECT id, tariff_version_id, component_type, billing_category, rate,
                    formula, unit, tier_min, tier_max, tier_unit, season, variant,
-                   billing_class
+                   billing_class, source_page, source_cell
             FROM tariff_components
             WHERE tariff_version_id IN ({placeholders})
             ORDER BY id
@@ -118,7 +118,22 @@ def validate_drafts(conn, version_id=None):
                 season,
                 variant,
                 billing_class,
+                source_page,
+                source_cell,
             ) = component
+
+            if (
+                not isinstance(source_page, int)
+                or isinstance(source_page, bool)
+                or source_page < 1
+            ):
+                failures.append(
+                    f"Component {component_id} has no valid source_page citation."
+                )
+            if not isinstance(source_cell, str) or not source_cell.strip():
+                failures.append(
+                    f"Component {component_id} has no source_cell citation."
+                )
 
             rate_present = rate is not None
             formula_present = isinstance(formula, str) and bool(formula.strip())

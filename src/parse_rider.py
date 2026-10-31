@@ -6,8 +6,10 @@ import pdfplumber
 
 try:
     from src import db
+    from src.citations import PageIndex, table_cell
 except ImportError:
     import db
+    from citations import PageIndex, table_cell
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,7 +89,7 @@ def schedule_codes_in_text(text):
     return [match.upper() for match in matches]
 
 
-def component(component_type, rate, unit, schedule_code):
+def component(component_type, rate, unit, schedule_code, source_page, source_cell):
     return (
         component_type,
         rate,
@@ -98,11 +100,21 @@ def component(component_type, rate, unit, schedule_code):
         None,
         None,
         None,
+        source_page,
+        source_cell,
     )
 
 
-def parse_uniform_rider(rider_code, texts):
-    text = " ".join(" ".join(page.splitlines()) for page in texts)
+def _joined_text(pages):
+    return " ".join(" ".join(text.splitlines()) for _, _, text in pages)
+
+
+def _page_index(pages):
+    return PageIndex([(number, text) for number, _, text in pages])
+
+
+def parse_uniform_rider(rider_code, pages):
+    text = _joined_text(pages)
     schedule_clause = re.search(
         r"Rate Schedules\s+(.+?)\s+shall be increased by",
         text,
@@ -124,8 +136,9 @@ def parse_uniform_rider(rider_code, texts):
         )
     rate = float(rate_match.group(1)) / 100
     component_type = rider_component_type(rider_code)
+    page, cell = _page_index(pages).text_citation(rate_match.group(0))
     return [
-        component(component_type, rate, "usd_per_kwh", schedule)
+        component(component_type, rate, "usd_per_kwh", schedule, page, cell)
         for schedule in schedules
     ]
 
@@ -133,8 +146,11 @@ def parse_uniform_rider(rider_code, texts):
 def parse_table_rider(rider_code, pages):
     component_type = rider_component_type(rider_code)
     extracted = []
-    for _, page, _ in pages:
+    headers = None  # a table continued on the next page reuses the earlier header row
+    for page_number, page, _ in pages:
         for table in page.extract_tables():
+            if table and table[0] and table[0][0] and "rate" in table[0][0].lower():
+                headers = table[0]
             for row in table:
                 if not row or not row[0]:
                     continue
@@ -142,8 +158,8 @@ def parse_table_rider(rider_code, pages):
                 if schedule not in TARIFF_SCHEDULES:
                     continue
                 amounts = []
-                for cell in row[1:]:
-                    if not cell:
+                for column, cell in enumerate(row):
+                    if column == 0 or not cell:
                         continue
                     match = re.search(
                         r"\$?\s*(\d+(?:\.\d+)?)\s*(¢/kWh|/kW)\b",
@@ -158,14 +174,30 @@ def parse_table_rider(rider_code, pages):
                             unit = "usd_per_kwh"
                         else:
                             unit = "usd_per_kw"
-                        amounts.append((rate, unit))
+                        amounts.append((rate, unit, column, cell))
                 if len(amounts) != 1:
                     raise ValueError(
                         f"Expected one rate for rider {rider_code} / "
                         f"schedule {schedule}, found {len(amounts)}."
                     )
-                rate, unit = amounts[0]
-                extracted.append(component(component_type, rate, unit, schedule))
+                rate, unit, column, cell = amounts[0]
+                header = None
+                if headers is not None:
+                    # merged header cells are None: the label sits at the nearest cell to the left
+                    header = next(
+                        (headers[i] for i in range(min(column, len(headers) - 1), -1, -1) if headers[i]),
+                        None,
+                    )
+                extracted.append(
+                    component(
+                        component_type,
+                        rate,
+                        unit,
+                        schedule,
+                        page_number,
+                        table_cell(row[0], header, cell),
+                    )
+                )
     if len(extracted) != len(TARIFF_SCHEDULES):
         raise ValueError(
             f"Expected {len(TARIFF_SCHEDULES)} table rates for rider "
@@ -177,8 +209,9 @@ def parse_table_rider(rider_code, pages):
     return extracted
 
 
-def parse_special_rider(rider_code, texts):
-    text = " ".join(" ".join(page.splitlines()) for page in texts)
+def parse_special_rider(rider_code, pages):
+    text = _joined_text(pages)
+    index = _page_index(pages)
     if rider_code == "G-CM":
         rate_match = re.search(
             r"Monthly Rate for RECs\s*\(MRR\)\s*equals\s*"
@@ -198,12 +231,15 @@ def parse_special_rider(rider_code, texts):
         expected_schedules = ["100", "110", "120", "130", "131", "132", "134"]
         if set(schedules) != set(expected_schedules) or len(schedules) != 7:
             raise ValueError(f"Unexpected Rider G-CM schedules: {schedules}")
+        page, cell = index.text_citation(rate_match.group(0))
         return [
             component(
                 rider_component_type(rider_code),
                 float(rate_match.group(1)) / 100,
                 "usd_per_kwh",
                 schedule,
+                page,
+                cell,
             )
             for schedule in schedules
         ]
@@ -226,12 +262,15 @@ def parse_special_rider(rider_code, texts):
         expected_schedules
     ):
         raise ValueError(f"Unexpected Rider {rider_code} schedules: {schedules}")
+    page, cell = index.text_citation(rate_match.group(0))
     return [
         component(
             f"rider_{rider_code.lower()}_monthly_credit",
             -float(rate_match.group(1)) / 100,
             "usd_per_kwh",
             schedule,
+            page,
+            cell,
         )
         for schedule in schedules
     ]
@@ -239,12 +278,11 @@ def parse_special_rider(rider_code, texts):
 
 def parse_rider_components(rider_code, pages):
     _, parser_type = rider_specs()[rider_code]
-    texts = [text for _, _, text in pages]
     if parser_type == "uniform":
-        return parse_uniform_rider(rider_code, texts)
+        return parse_uniform_rider(rider_code, pages)
     if parser_type == "table":
         return parse_table_rider(rider_code, pages)
-    return parse_special_rider(rider_code, texts)
+    return parse_special_rider(rider_code, pages)
 
 
 def ensure_rider_version(conn, rider_code):
@@ -316,14 +354,16 @@ def parse_rider(rider_code, pdf_path=PDF_PATH, database_path=DATABASE_PATH):
                 tier_max,
                 tier_unit,
                 variant,
+                source_page,
+                source_cell,
             ) in extracted:
                 conn.execute(
                     """
                     INSERT INTO tariff_components(
                         tariff_version_id, component_type, billing_category, rate,
                         formula, unit, season, tier_min, tier_max, tier_unit,
-                        variant
-                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                        variant, source_page, source_cell
+                    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         version_id,
@@ -336,6 +376,8 @@ def parse_rider(rider_code, pdf_path=PDF_PATH, database_path=DATABASE_PATH):
                         tier_max,
                         tier_unit,
                         variant,
+                        source_page,
+                        source_cell,
                     ),
                 )
             conn.commit()

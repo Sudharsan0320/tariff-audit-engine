@@ -55,9 +55,19 @@ CREATE TABLE IF NOT EXISTS tariff_components (
     season TEXT,
     variant TEXT,
     billing_class TEXT,
+    source_page INTEGER,
+    source_cell TEXT,
     FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id)
 );
 """)
+
+# Databases built before B1 lack the evidence columns; add them in place.
+component_columns = {
+    row[1] for row in cur.execute("PRAGMA table_info(tariff_components)").fetchall()
+}
+for column, column_type in (("source_page", "INTEGER"), ("source_cell", "TEXT")):
+    if column not in component_columns:
+        cur.execute(f"ALTER TABLE tariff_components ADD COLUMN {column} {column_type}")
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS tariff_rules (

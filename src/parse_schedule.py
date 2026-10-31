@@ -5,8 +5,10 @@ import sys
 
 try:
     from src import db
+    from src.citations import PageIndex, line_cell
 except ImportError:
     import db
+    from citations import PageIndex, line_cell
 
 
 parser = argparse.ArgumentParser(description="Parse a Virginia tariff schedule.")
@@ -37,6 +39,14 @@ with pdfplumber.open(pdf_path) as pdf:
 
 print(f"{len(matching_pages)} pages found")
 print("Pages:", ", ".join(str(page_index + 1) for page_index, _ in matching_pages))
+
+PAGES = PageIndex([(page_index + 1, text) for page_index, text in matching_pages])
+
+
+def around(paragraph, match):
+    """A short printed excerpt that contains the matched amount."""
+    return paragraph[max(0, match.start() - 70) : match.end() + 30].strip()
+
 
 if not matching_pages:
     print(f"ERROR: no pages found for schedule {args.schedule_code}; nothing written", file=sys.stderr)
@@ -148,6 +158,7 @@ def schedule_b_components(schedule_text):
                     None,
                     None,
                     None,
+                    *PAGES.text_citation(item.group(0)),
                 )
             )
 
@@ -192,6 +203,7 @@ def schedule_c_components(schedule_text):
                     f"{paragraph}"
                 )
             rate = float(factor_match.group(1))
+            snippet = around(paragraph, factor_match)
         else:
             amount_matches = list(
                 re.finditer(r"\$\s*(\d+(?:\.\d+)?)", paragraph)
@@ -214,6 +226,7 @@ def schedule_c_components(schedule_text):
                     f"Missing per instance unit in Schedule C item 2: {paragraph}"
                 )
             rate = float(amount_matches[0].group(1))
+            snippet = around(paragraph, amount_matches[0])
         extracted.append(
             (
                 component_type,
@@ -225,6 +238,7 @@ def schedule_c_components(schedule_text):
                 None,
                 None,
                 None,
+                *PAGES.text_citation(snippet),
             )
         )
     return extracted
@@ -308,6 +322,7 @@ def schedule_d_components(charge_section):
                 None,
                 None,
                 None,
+                *PAGES.text_citation(around(clause, flat_rates[0])),
             )
         )
     return extracted
@@ -341,6 +356,7 @@ def schedule_e_components(schedule_text):
             None,
             None,
             None,
+            *PAGES.text_citation(charge_rates[0].group(0)),
         )
     ]
 
@@ -394,6 +410,7 @@ def schedule_sgcm_components(schedule_text):
             None,
             None,
             None,
+            *PAGES.text_citation(monthly_charge[0].group(0)),
         )
     ]
     for start_month, end_month in payment_specs:
@@ -426,6 +443,7 @@ def schedule_sgcm_components(schedule_text):
                 None,
                 None,
                 None,
+                *PAGES.text_citation(payment_rate[0].group(0)),
             )
         )
     return extracted
@@ -442,6 +460,17 @@ component_count = cur.fetchone()[0]
 if component_count == 0:
     schedule_text = "\n".join(page_text for _, page_text in matching_pages)
     lines = schedule_text.splitlines()
+    line_pages = [
+        page_index + 1
+        for page_index, page_text in matching_pages
+        for _ in page_text.splitlines()
+    ]
+    if len(line_pages) != len(lines):
+        raise ValueError("Line-to-page map does not match the schedule text.")
+
+    def line_citation(line_number, line_text):
+        return line_pages[line_number], line_cell(line_text.strip())
+
     roman_heading = re.compile(r"^\s*([IVXLCDM]+)\.\s", re.I)
     rate_start = None
     rate_section_number = None
@@ -473,14 +502,16 @@ if component_count == 0:
                 tier_max,
                 component_tier_unit,
                 billing_class,
+                source_page,
+                source_cell,
             ) in extracted_components:
                 cur.execute(
                     """
                     INSERT INTO tariff_components(
                         tariff_version_id, component_type, billing_category, rate,
                         formula, unit, tier_min, tier_max, tier_unit, season, variant,
-                        billing_class
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        billing_class, source_page, source_cell
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         tariff_version_id,
@@ -495,6 +526,8 @@ if component_count == 0:
                         season,
                         variant,
                         billing_class,
+                        source_page,
+                        source_cell,
                     ),
                 )
             conn.commit()
@@ -631,7 +664,8 @@ if component_count == 0:
             re.I,
         )
 
-        for line in rate_lines[1:]:
+        for line_offset, line in enumerate(rate_lines[1:], start=1):
+            cite = line_citation(rate_start + line_offset, line)
             stripped_line = line.strip()
             if args.schedule_code == "SSL":
                 numbered_heading = re.match(r"^\d+\.\s*(.*)$", stripped_line)
@@ -691,6 +725,7 @@ if component_count == 0:
                             None,
                             None,
                             None,
+                            *cite,
                         )
                     )
                     continue
@@ -773,6 +808,7 @@ if component_count == 0:
                             None,
                             None,
                             None,
+                            *cite,
                         )
                     )
                 continue
@@ -857,6 +893,7 @@ if component_count == 0:
                             None,
                             None,
                             None,
+                            *cite,
                         )
                     )
             elif current_kind is not None:
@@ -879,14 +916,19 @@ if component_count == 0:
                             None,
                             None,
                             None,
+                            *cite,
                         )
                     )
 
-    for line in (
-        rate_lines[1:]
-        if not is_lighting_schedule and args.schedule_code != "D"
-        else []
+    for line_offset, line in enumerate(
+        (
+            rate_lines[1:]
+            if not is_lighting_schedule and args.schedule_code != "D"
+            else []
+        ),
+        start=1,
     ):
+        cite = line_citation(rate_start + line_offset, line)
         stripped_line = line.strip()
         if not stripped_line:
             continue
@@ -1058,6 +1100,7 @@ if component_count == 0:
                         None,
                         None,
                         current_billing_class,
+                        *cite,
                     )
                 )
             continue
@@ -1165,6 +1208,7 @@ if component_count == 0:
                 tier_max,
                 tier_unit,
                 current_billing_class,
+                *cite,
             )
         )
 
@@ -1181,14 +1225,16 @@ if component_count == 0:
         tier_max,
         component_tier_unit,
         billing_class,
+        source_page,
+        source_cell,
     ) in extracted_components:
         cur.execute(
             """
             INSERT INTO tariff_components(
                 tariff_version_id, component_type, billing_category, rate,
                 formula, unit, tier_min, tier_max, tier_unit, season, variant,
-                billing_class
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                billing_class, source_page, source_cell
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tariff_version_id,
@@ -1203,6 +1249,8 @@ if component_count == 0:
                 season,
                 variant,
                 billing_class,
+                source_page,
+                source_cell,
             ),
         )
 

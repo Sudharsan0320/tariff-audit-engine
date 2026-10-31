@@ -1,8 +1,10 @@
 import pdfplumber, re  # two toolboxes: pdfplumber reads PDFs, re does pattern-matching (regex)
 try:
     from src import db
+    from src.citations import table_cell
 except ImportError:
     import db
+    from citations import table_cell
 
 with pdfplumber.open("data/raw/rider-gen.pdf") as pdf:  # open the PDF as 'pdf'; with auto-closes it when the block ends
     print(f"Pages: {len(pdf.pages)}")  # f-string: { } runs code inside text; len() counts the PDF's pages
@@ -70,10 +72,11 @@ component_count = cur.fetchone()[0]
 if component_count == 0:
     for row in tables[0][1:]:  # loop over the table's data rows; tables[0] = first table, [1:] = rows from index 1 onward, skipping row 0 (the header)
         schedule = row[0]  # the row's first cell: the schedule name, e.g. 'Schedule 5'
-        for component_type, rate_cell, unit, divisor in (
-            ("supply", row[1], "usd_per_kwh", 100),
-            ("demand", row[4], "usd_per_kw", 1),
+        for component_type, rate_column, unit, divisor in (
+            ("supply", 1, "usd_per_kwh", 100),
+            ("demand", 4, "usd_per_kw", 1),
         ):
+            rate_cell = row[rate_column]
             if rate_cell is None or not rate_cell.strip():  # if the cell is missing, or blank even after strip() removes surrounding whitespace...
                 continue  # ...skip to the next round of the loop (no component gets written for this cell)
 
@@ -93,8 +96,8 @@ if component_count == 0:
                 """
                 INSERT INTO tariff_components(
                     tariff_version_id, component_type, billing_category, rate,
-                    formula, unit
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    formula, unit, source_page, source_cell
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     tariff_version_id,
@@ -103,6 +106,8 @@ if component_count == 0:
                     float(match.group(1)) / divisor,
                     None,
                     unit,
+                    1,  # the rate table is on the first (only) page of rider-gen.pdf
+                    table_cell(schedule, tables[0][0][rate_column], rate_cell),
                 ),
             )
 

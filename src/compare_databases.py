@@ -31,6 +31,8 @@ COMPONENT_CONTENT = (
     "tariff_version_id, component_type, billing_category, rate, formula, unit, "
     "tier_min, tier_max, tier_unit, season, variant, billing_class"
 )
+# Evidence columns are compared in --strict mode only: the frozen pre-B1 SQLite file lacks them.
+EVIDENCE_CONTENT = ", source_page, source_cell"
 PLAIN_ORDER_SKIP = {"audit_runs", "audit_lines", "tariff_components"}
 
 
@@ -94,7 +96,9 @@ def canonical_content(path, current_mapping, strict=False):
 
         # sorted in Python: NULL ordering differs between SQLite and Postgres
         rows = sorted(
-            (_num(list(r)) for r in conn.execute(f"SELECT {COMPONENT_CONTENT} FROM tariff_components")),
+            (_num(list(r)) for r in conn.execute(
+                f"SELECT {COMPONENT_CONTENT}{EVIDENCE_CONTENT if strict else ''} FROM tariff_components"
+            )),
             key=lambda r: json.dumps(r, default=str),
         )
         content["tariff_components (ids ignored)"] = _digest(rows)

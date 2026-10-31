@@ -16,12 +16,18 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 try:
     from src import db
     from src.activate_version import activate_version
     from src.audit_bills import run_audits
+    from src.audit_report import (
+        AuditReportError,
+        AuditRunNotFound,
+        load_report_data,
+        render_report,
+    )
     from src.ingest_usage_history import ingest_usage_pdf
     from src.parse_rider import parse_rider
     from src.validate_draft import validate_drafts
@@ -29,6 +35,12 @@ except ImportError:
     import db
     from activate_version import activate_version
     from audit_bills import run_audits
+    from audit_report import (
+        AuditReportError,
+        AuditRunNotFound,
+        load_report_data,
+        render_report,
+    )
     from ingest_usage_history import ingest_usage_pdf
     from parse_rider import parse_rider
     from validate_draft import validate_drafts
@@ -159,6 +171,21 @@ def get_audit(bill_id: int):
     if not query("SELECT 1 AS x FROM bills WHERE id = ?", (bill_id,)):
         refuse(404, f"No bill {bill_id}.")
     return audit_view(bill_id)
+
+
+@app.get("/bills/{bill_id}/audit/report")
+def get_audit_report(bill_id: int):
+    conn = db.connect(target(), readonly=True)
+    try:
+        run, lines, components, mapping = load_report_data(conn, bill_id=bill_id)
+        markdown = render_report(run, lines, components, mapping)
+    except AuditRunNotFound as error:
+        refuse(404, str(error))
+    except AuditReportError as error:
+        refuse(422, "The audit report was refused.", [str(error)])
+    finally:
+        conn.close()
+    return Response(content=markdown, media_type="text/markdown")
 
 
 # ---------------------------------------------------------------- actions

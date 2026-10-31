@@ -729,3 +729,34 @@ content, which now includes the two new columns, so audits rebuilt after B1 have
 new hashes. This is the deliberate effect of adding evidence, not a drift.
 `compare_databases.py` includes the citation columns only under `--strict`,
 because the frozen SQLite artifact predates them.
+
+## Stage 2 — B2: audit report
+
+Decisions:
+
+- **G1 — Markdown.** Reports are rendered as Markdown with no new dependencies.
+  Print/PDF presentation polish belongs to the UI stage.
+- **G2 — per-run determinism.** Each audit run has one report, rendered from its
+  stored run timestamp and audit data; rendering never uses the wall clock.
+- **G3 — evidence by disposition.** Direct-mapped lines show their applied rate,
+  unit, determinant, and tariff-component citation. Zero-expected and
+  out-of-scope lines show their disposition and recorded reason, with no
+  fabricated citation.
+- **G4 — reconciliation gate.** Rendering refuses to write a report if stored
+  line deltas do not sum to the run's stored total delta or any line lacks a
+  verdict.
+- **G5 — local report files.** CLI reports are written under
+  `data/reports/`, which is gitignored because it contains real account data.
+- **G6 — API.** `GET /bills/{bill_id}/audit/report` returns the latest report as
+  `text/markdown`; a bill without an audit run receives a 404.
+
+For legacy `MISSING` direct lines, `audit_lines.detail` does not persist the
+rate or determinant used. B2 reconstructs the rate and citation from the joined
+`tariff_components` row and reconstructs the determinant from
+`bill_determinants` using the checked-in mapping. This is permitted only when
+the checked-in mapping version equals the run's `mapping_version` and the
+bill/type lookup returns exactly one value; otherwise rendering refuses and
+writes no file. **Deferred durable fix:** `audit_bills` should store the
+rate/determinant on `MISSING` lines when audits are created. That schema/data
+change is not part of B2 and is folded into Stage 3 (B16), the next time
+`audit_bills` is opened.

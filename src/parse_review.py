@@ -154,6 +154,21 @@ def scan_for_review(conn):
     return {"created": created, "total_created": sum(created.values())}
 
 
+def queue_item(conn, source_kind, source_ref, schedule_code, field, stored_value, signal, detail):
+    """Queue one item for a parser that declined to force a result. Idempotent; returns True if new."""
+    exists = conn.execute(
+        "SELECT 1 FROM parse_review_items WHERE source_kind = ? AND source_ref = ? "
+        "AND field = ? AND signal = ?", (source_kind, source_ref, field, signal)).fetchone()
+    if exists:
+        return False
+    conn.execute(
+        "INSERT INTO parse_review_items "
+        "(source_kind, source_ref, schedule_code, field, stored_value, signal, detail) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (source_kind, source_ref, schedule_code, field, stored_value, signal, detail))
+    return True
+
+
 def list_items(conn, status=None):
     sql = "SELECT * FROM parse_review_items"
     params = ()

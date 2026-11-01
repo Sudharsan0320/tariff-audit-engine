@@ -11,8 +11,6 @@ from decimal import Decimal
 import hashlib
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +28,7 @@ try:
         load_report_data,
         render_report,
     )
+    from src import document_intake
     from src.ingest_usage_history import ingest_usage_pdf
     from src.line_validation import BillNotFound, ValidationRefused, validate_bill_lines
     from src.anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
@@ -37,7 +36,6 @@ try:
     from src import weather_check
     from src.portfolio import PortfolioError, portfolio_ranking, register_site
     from src.parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
-    from src.parse_rider import parse_rider
     from src.schedule_comparison import (
         ComparisonRefused,
         load_comparison_data,
@@ -63,6 +61,7 @@ except ImportError:
         load_report_data,
         render_report,
     )
+    import document_intake
     from ingest_usage_history import ingest_usage_pdf
     from line_validation import BillNotFound, ValidationRefused, validate_bill_lines
     from anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
@@ -70,7 +69,6 @@ except ImportError:
     import weather_check
     from portfolio import PortfolioError, portfolio_ranking, register_site
     from parse_review import ItemNotFound, ParseReviewError, list_items, resolve_item
-    from parse_rider import parse_rider
     from schedule_comparison import (
         ComparisonRefused,
         load_comparison_data,
@@ -116,14 +114,22 @@ def refuse(status, message, failures=None, **extra):
 
 
 def save_upload(upload: UploadFile):
+    """Store the PDF content-addressed; returns (path, sha256, size, already_stored)."""
     data = upload.file.read()
     if not data.startswith(b"%PDF"):
         refuse(422, "The uploaded file is not a PDF.", ["File does not start with %PDF."])
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    safe = Path(upload.filename or "upload.pdf").name
-    path = UPLOAD_DIR / f"{hashlib.sha256(data).hexdigest()[:12]}-{safe}"
-    path.write_bytes(data)
-    return path
+    already = document_intake.content_path(hashlib.sha256(data).hexdigest(), UPLOAD_DIR).exists()
+    path, sha256, size = document_intake.save_upload(data, upload.filename, UPLOAD_DIR)
+    return path, sha256, size, already
+
+
+def refuse_wrong_kind(detection, expected, endpoint):
+    refuse(
+        422,
+        f"This document was identified as a {detection['doc_kind']}, not a {expected}; it was not parsed.",
+        [f"Send it to {endpoint} instead."],
+        detection=detection,
+    )
 
 
 # ---------------------------------------------------------------- reads
@@ -470,7 +476,10 @@ def get_version_alert(new_id: int, against: int, bill: int):
 
 @app.post("/uploads/bill")
 def upload_bill(file: UploadFile = File(...)):
-    path = save_upload(file)
+    path, _, _, _ = save_upload(file)
+    detection = document_intake.identify_document(path)
+    if detection["doc_kind"] == document_intake.TARIFF:
+        refuse_wrong_kind(detection, "bill", "POST /uploads/tariff")
     try:
         with db.connect(target()) as conn:
             draft, status, validation, _ = ingest_usage_pdf(conn, path)
@@ -494,44 +503,50 @@ def upload_bill(file: UploadFile = File(...)):
 
 @app.post("/uploads/tariff")
 def upload_tariff(
-    kind: str = Form(..., description="'schedule' or 'rider'"),
-    code: str = Form(..., description="Schedule or rider code, e.g. 110 or T-CM"),
+    kind: Optional[str] = Form(None, description="'schedule' or 'rider' (needed for a supported utility)"),
+    code: Optional[str] = Form(None, description="Schedule or rider code, e.g. 110 or T-CM"),
     file: UploadFile = File(...),
 ):
-    if kind not in ("schedule", "rider"):
+    if kind is not None and kind not in ("schedule", "rider"):
         refuse(422, "kind must be 'schedule' or 'rider'.", [f"Got {kind!r}."])
-    path = save_upload(file)
-    if kind == "rider":
-        try:
-            version_id, count = parse_rider(code, pdf_path=path, database_path=target())
-        except Exception as error:
-            refuse(422, "The rider could not be parsed.", [f"{type(error).__name__}: {error}"])
-    else:
-        env = {k: v for k, v in os.environ.items() if k not in ("TARIFF_DB_URL", "TARIFF_DB_PATH")}
-        env["TARIFF_DB_URL" if db.is_postgres(target()) else "TARIFF_DB_PATH"] = str(target())
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "src" / "parse_schedule.py"), code, "--pdf", str(path)],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
+    path, sha256, size, already = save_upload(file)
+    detection = document_intake.identify_document(path)
+    if detection["doc_kind"] == document_intake.BILL:
+        refuse_wrong_kind(detection, "tariff", "POST /uploads/bill")
+    intake = {"sha256": sha256, "size": size, "stored_as": path.name, "duplicate_upload": already}
+    try:
+        routing = document_intake.route_tariff(
+            path, detection, target=target(), kind=kind, code=code
         )
-        if result.returncode != 0:
-            lines = (result.stdout + result.stderr).strip().splitlines()
-            refuse(422, "The schedule could not be parsed.", lines[-5:])
-        wanted = code
-        found = query(
-            "SELECT id FROM tariff_versions WHERE schedule_code = ? ORDER BY id DESC", (wanted,)
-        )
-        if not found:
-            refuse(422, "The parser wrote no version.", [f"No version for {code}."])
-        version_id, count = found[0]["id"], None
+    except document_intake.AdapterRefused as error:
+        refuse(422, error.message, error.failures, detection=detection)
+    except document_intake.IntakeError as error:
+        refuse(422, "The tariff upload was refused.", [str(error)], detection=detection)
+    status = routing["status"]
+    document_intake.record_intake(path, file.filename, detection, status)
+    if status == document_intake.INGESTED:
+        return {**routing, "detection": detection, "intake": intake}
+    if status != document_intake.PARSED:
+        return {
+            "status": status,
+            "message": routing["message"],
+            "versions_created": 0,
+            "detection": detection,
+            "intake": intake,
+        }
+    version_id, count = routing["version_id"], routing["components"]
     with db.connect(target(), readonly=True) as conn:
         version = conn.execute(
             "SELECT status FROM tariff_versions WHERE id = ?", (version_id,)
         ).fetchone()
     if version and version[0] != "draft":
-        return {"version_id": version_id, "status": version[0], "note": "already active; nothing changed"}
+        return {
+            "version_id": version_id,
+            "status": version[0],
+            "note": "already active; nothing changed",
+            "detection": detection,
+            "intake": intake,
+        }
     with db.connect(target(), readonly=True) as conn:
         failures = validate_drafts(conn, version_id)
     if failures:
@@ -541,7 +556,14 @@ def upload_tariff(
             failures,
             version_id=version_id,
         )
-    return {"version_id": version_id, "status": "draft", "components": count, "validated": True}
+    return {
+        "version_id": version_id,
+        "status": "draft",
+        "components": count,
+        "validated": True,
+        "detection": detection,
+        "intake": intake,
+    }
 
 
 @app.get("/", include_in_schema=False)

@@ -1168,3 +1168,90 @@ cumulative) as each stage closed:
 Standing limits: only Amendment 12 is loaded, so lookback, diff alerts and anomaly era checks
 grow useful as historical and later versions are loaded; the engine does not evaluate tiered
 `usd_per_kw` groups or `usd_per_rkva`; the API is single-user and unauthenticated by design.
+
+## Stage 11 — Universal electric upload (11A: document intake)
+
+### Requirement (the owner, 2026-10-31)
+
+A user uploads ANY electric utility's tariff PDF → the system identifies it, saves it under that utility/state/version, and later audits bills uploaded for that utility.
+
+### Defect removed
+
+API tariff uploads ran the Amendment 12 parsers and stamped everything Amendment 12 / Virginia Electric and Power Company. The stamp is hardcoded in `parse_schedule.py` (version values `VA`, utility, code, 12, `2025-07-01`, `draft`), `parse_rider.py` (`EFFECTIVE_FROM`, `RIDER_VERSION`, `UTILITY`, `STATE`), `create_cross_reference_versions.py` and `load_rules.py`. Neither upload parser looked at the PDF's identity.
+
+### Intake design: save → identify → route → parse
+
+1. **Save** (`document_intake.save_upload`): bytes stored as `<sha256>.pdf`, content-addressed; identical bytes are not rewritten. A `<sha256>.intake.json` sidecar records the original filename, status and detection summary.
+2. **Identify** (`identify_document`): native PDF text of the first 6 pages, no OCR. Probes match identity only (utility names, tariff-book headings, bill markers), never rate values. Returns doc_kind (tariff | bill | unknown), utility, state, version label, effective date, evidence (probe, page, text) and reasons. Multi-word headings match whitespace-tolerantly because PDF text wraps lines.
+3. **Route** (`route_tariff`): a registry maps utility → adapter (factory + `accepts`), adapters conform to `parser_contract.py`. Dominion routes to the existing parsers, unchanged, but only for Amendment No. 12 effective 2025-07-01. Statuses: `parsed`; `saved_unsupported` (utility detected, no adapter or document not accepted: file kept, zero version rows, stated plainly); `saved_unidentified` (unknown). Nothing is stamped with another utility's identity. A bill sent to the tariff endpoint is refused by kind (422); a tariff sent to the bill endpoint likewise.
+4. **Parse**: only on `parsed`, followed by the existing validation and draft flow.
+
+API: `POST /uploads/tariff` returns detection, status, `versions_created` and intake info; `kind` and `code` are now optional and required only when an adapter is selected. Bill upload is otherwise unchanged (bill routing is Task 3).
+
+### Substage map
+
+- 11A intake: save, identify, route (this stage).
+- 11B collect the data: an AI extraction agent for every detected tariff that has no hand-written adapter (first target: Appalachian Power Tariff No. 28).
+- 11C calculate for that utility: audit bills against that utility's versions.
+- 11D other schedules + witness + UI.
+
+### Inventory of the previous upload path
+
+- `POST /uploads/bill` called `ingest_usage_pdf` (the EAP parser); a tariff PDF sent there was only caught by an exception.
+- `POST /uploads/tariff` required `kind` (schedule | rider) and `code`; rider → `parse_rider(code, pdf, db)`, schedule → `src/parse_schedule.py <code> --pdf`; then `validate_drafts` and draft status.
+- Files landed in `data/uploads/<sha12>-<original name>` (`TARIFF_UPLOAD_DIR`), with no deduplication. Now `<full sha256>.pdf`.
+- The Amendment 12 stamp: see "Defect removed".
+
+## Stage 11B — AI extraction agent
+
+Owner decision (2026-10-31): extraction for a newly uploaded company is done by an AI agent that does the hand-written parser's job. A hand-written adapter still wins where one exists (Dominion). The AI adapter (`src/ai_extract.py`) is the route for every other detected electric utility tariff. `src/parse_apco.py` remains in the tree and is not the upload route.
+
+### Routing
+
+`route_tariff` keeps Dominion on `parse_schedule` / `parse_rider`. A Dominion schedule book still requires Amendment No. 12 and effective 2025-07-01. A `kind=rider` upload is refused only when the document itself prints a different amendment number or effective date; a rider sheet that prints neither goes to `parse_rider`, as before 11A. Anything else detected as an electric tariff uses the AI adapter. A missing key returns `saved_unsupported` with "AI extraction not configured". A credit or balance refusal (the HTTP 400 from the first witness) returns "AI extraction billing". Any other API or network failure returns "AI extraction unavailable". No version rows are written in any of those cases.
+
+Rider proof, scratch databases, `data/raw/rider-gen.pdf`, `kind=rider`, `code=GEN`: the API and a direct `parse_rider` call both write 0 components. Both refuse with `Unsupported rider GEN` (`parse_rider` has no GEN specification; that file was loaded historically by `parse_rider_gen.py`). The API returns 422 from that refusal. It does not return `saved_unsupported`, and it does not stamp the sheet as Amendment 12.
+
+### Chunking
+
+The model sees one schedule at a time. Sections are chosen by code, not by the model. Appalachian Power Tariff No. 28 (158 PDF pages) prints a table of contents in sheet numbers (`4-1 thru 4-2`), not PDF page ranges. Each body page prints `Sheet No.`, and those sheet prefixes are the section bounds. A second range on the same index row is included (Standby Service sheets `21A-1` through `21A-4` stay with `S.B.S.`). The exhibit of applicable riders is its own section. Pages 49–55 have no extractable text (encoded font, no OCR); Large Power Service and the R.P.S. R.A.C. sheet, which the index places there, are queued as `unreadable_pages` and are not sent to the model. A book with no usable index is split on `SCHEDULE` / `RIDER` / exhibit headings instead. Every page of a section is labeled with its PDF page number in the prompt.
+
+The index yields 48 sections. Terms and conditions, the town list, and the underground installation plan are not sections.
+
+### Output and verification
+
+The client is the official Anthropic Python SDK. The key is `ANTHROPIC_API_KEY` in the gitignored `.env`. The model id is the module constant `MODEL`. The first witness used `claude-fable-5-1`. The constant is now `claude-sonnet-5-5`, the current Sonnet id on the account's model list (`claude-sonnet-4-5-20250929`, `claude-sonnet-4-6`, `claude-sonnet-5`, and `claude-sonnet-5-5` are all callable). Responses are cached at `data/cache/ai-extract/<model-id>/<sha256 of the PDF>.json`. A section is replayed only when that file's entry was stored for the same model, so the nine Fable responses are not reused for a Sonnet run.
+
+Per schedule the model must return JSON: designation, name, effective date as printed, disposition `rates` or `cross_reference_only`, components (`printed_label`, `component_type`, rate as a decimal string in dollars, `unit`, `variant`, `source_page`, `source_quote`), and rules (`rule_type`, `rule_text`, `source_page`, `source_quote`). `component_type`, `rule_type`, and `unit` are prompted with the distinct values already stored on `tariff_components` and `tariff_rules` (units also include the validator's unit set). A new value is kept only when nothing stored fits, and the run reports every new value.
+
+Verification is ordinary code. A component is inserted only when (a) its quote appears in the cited page's text after whitespace is collapsed and (b) its dollar rate equals a number printed on that page, or the same amount expressed in cents (`rate * 100`). A failure is queued, not stored, with signal `quote_not_found` or `rate_not_on_page`. A unit outside the stored set is queued as `unit_not_in_vocabulary`. Rules require the quote check only. `cross_reference_only` stores a version and no components. A `rates` section with nothing verified stores no version. The printed effective date must itself appear in the section; it is parsed to an ISO date and never assumed.
+
+Storage uses the draft path the hand-written parsers use: one `draft` version per schedule, `schedule_code` the printed designation with dots and spaces removed (`RS`, `SGS`, `GS`, `LPS`), state and utility from the 11A detection, `version` the tariff number printed on the book. The quote is stored in `source_cell`. There is no citation column on `tariff_rules`, and none was added; a rule is stored as `rule_type` and `rule_text` after the quote check. Identical upload bytes are deduped by content hash, and the model response is cached under that hash and the model id, so a re-upload with the same model does not call the model again.
+
+### Contract, validation, activation
+
+`check_parser_contract` against the adapter with an injectable fake client: (i) drafts only, and at least one; (ii) every stored component has `source_page` and `source_cell`; (iii) `validate_drafts` returns no refusals; (iv) a second run changes nothing; (v) a foreign source raises and writes nothing.
+
+The route then runs `validate_drafts` on each new draft. A clean draft is activated with `activate_with_alert`, the same call manual activation uses. A failing draft stays `draft` and is queued with signal `validation_failed`.
+
+### Witness
+
+The live call on `data/raw/APCo-Tariff-28.pdf` was started against scratch database `tariff_11b_scratch` (a copy of primary Postgres with the hand-written Appalachian rows removed, leaving the 41 Dominion versions). Model string before and after the run: `claude-fable-5-1`. Nine sections completed (`end_turn`) and were cached by content hash: RS, RS-E, RS-SD, RS-TOD, RS-STOU, SWS, SGS, GS, GS-TOD. Token totals on those nine calls: 28,258 input and 47,186 output. Cache read and cache creation were 0. The SDK usage object has no cost field.
+
+The tenth call, L.G.S.-T.O.D. (PDF pages 47–48), was rejected with HTTP 400 `invalid_request_error`: the account credit balance is too low. `x-should-retry` was false. `parse_book` writes the database only after every section returns, so the scratch database received no AI rows. Nothing was validated or activated. Spot-checks were not run. Primary Postgres was not modified (Dominion 41 versions plus the existing 14 hand-written Appalachian versions). Frozen `data/tariffs.db` SHA-256 is still `cc765bf329f723d196ed069452ec0c78da44aeaecaba2d5f202094cc0859c6eb`. The scratch database was dropped. The nine Fable responses remain in `data/cache/ai-extract/<sha256>.json` (no model directory). Local suite after that witness: 378 passed. That credit refusal was reported with the single message "AI extraction not configured/unavailable".
+
+### Sonnet run
+
+`MODEL` changed from `claude-fable-5-1` to `claude-sonnet-5-5`. Cache files now live at `data/cache/ai-extract/<model-id>/<sha256>.json`, and a cached section is used only when its stored model matches `MODEL`, so the Fable file was not read. Refusals are three strings: "AI extraction not configured", "AI extraction billing", and "AI extraction unavailable".
+
+Scratch database `tariff_11c_scratch` is a copy of primary with the 14 hand-written Appalachian versions removed. The Sonnet pass made 46 model calls (10, then a resume of 36 after an adapter bug: the unreadable-page queue call omitted `detail`, which raised `TypeError` on L.P.S. before any commit). The resume did not call the model again for the 10 cached sections. Combined usage: 168,479 input tokens and 130,396 output tokens. Cache read and cache creation were 0. The SDK usage object has no cost field. A later `parse_book` of the same file made 0 model calls.
+
+45 sections returned `end_turn`. Outdoor Lighting stopped at `max_tokens` and was queued `model_output_incomplete` with no partial rows. L.P.S. and R.P.S. R.A.C. were queued `unreadable_pages` (PDF pages 49–55) and were not sent to the model. Every `end_turn` section put an ISO date in `effective_date` (25 of them `2025-01-01`). That string is not printed on the page — the book prints "January 1, 2025" — so the verifier queued `quote_not_found` on the effective date and stored no version. Component checks did not run. `validate_drafts` had no drafts to accept or refuse. Nothing was activated. The scratch AI set is empty.
+
+Against the hand-written primary set (14 active versions, 162 components, 56 rules) the agreement count is 0. There is no stored-rate disagreement. All 162 hand-written components are only on the hand-written side. No AI schedule was stored, including the book sections the hand-written parser does not cover. For GS-TOD sheet 13-1 the model proposed primary-voltage on-peak energy as 0.05574, 0.03987, and 0.09562 dollars (printed 5.574¢, 3.987¢, and 9.562¢). It did not propose 9.561¢. None of the three were stored.
+
+Primary was not modified: Appalachian 14 versions / 162 components, Dominion 41 versions / 448 components. Local suite after this run: 381 passed.
+
+### Scope
+
+The Open Access Distribution book is a separate document and is not in hand. No rate literal is hardcoded; a stored rate exists only after the verifier matches it to the page.

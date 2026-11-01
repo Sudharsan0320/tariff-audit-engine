@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -45,6 +46,10 @@ SOURCE_KIND = "tariff_book_section"
 
 MONTHS = {m: i for i, m in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+FULL_MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
 NUMBER = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+")
 SHEET = re.compile(
     r"Sheet(?:\s+No\.)?\s+((?:NBP[\s-]*)?\d+[A-Z]?(?:\s*\.?\s*-\s*\d+)?)", re.I)
@@ -381,6 +386,12 @@ def quote_on_page(quote, text):
     return squash(quote) in squash(text)
 
 
+def printed_date_on_page(value, text):
+    month = FULL_MONTHS[value.month - 1]
+    pattern = rf"\b{month}\s+{value.day},\s+{value.year}\b"
+    return re.search(pattern, squash(text), re.I) is not None
+
+
 def iso_date(text):
     cleaned = re.sub(r"^effective:?\s*", "", squash(text), flags=re.I)
     match = re.search(r"([A-Za-z]+)\.?\s+(\d{1,2}),?\s*(\d{4})", cleaned)
@@ -495,7 +506,6 @@ def _page_map(section):
 def _verify_payload(payload, section, vocab, new_values):
     """Return (components, rules, queued items). Queued items are not data."""
     pages = _page_map(section)
-    joined = "\n".join(pages.values())
     queued = []
     code = section["schedule_code"]
     disposition = payload.get("disposition")
@@ -504,14 +514,20 @@ def _verify_payload(payload, section, vocab, new_values):
                              "disposition must be rates or cross_reference_only"))
         return [], [], queued, None
     printed_date = payload.get("effective_date")
-    if not quote_on_page(printed_date, joined):
-        queued.append(_queue(code, "effective_date", str(printed_date), "quote_not_found",
-                             "the printed effective date is not on this section's pages"))
-        return [], [], queued, None
-    effective = iso_date(printed_date)
-    if effective is None:
+    parsed_date = iso_date(printed_date)
+    if parsed_date is None:
         queued.append(_queue(code, "effective_date", str(printed_date), "effective_date_unparsed",
                              "the printed effective date could not be read as a date"))
+        return [], [], queued, None
+    try:
+        effective = date.fromisoformat(parsed_date)
+    except ValueError:
+        queued.append(_queue(code, "effective_date", str(printed_date), "effective_date_unparsed",
+                             "the printed effective date could not be read as a date"))
+        return [], [], queued, None
+    if not any(printed_date_on_page(effective, text) for text in pages.values()):
+        queued.append(_queue(code, "effective_date", str(printed_date), "quote_not_found",
+                             "the printed effective date is not on this section's pages"))
         return [], [], queued, None
 
     components, rules = [], []
@@ -534,7 +550,7 @@ def _verify_payload(payload, section, vocab, new_values):
                                  failure["detail"], "rule", index))
         elif result:
             rules.append(result)
-    return components, rules, queued, effective
+    return components, rules, queued, effective.isoformat()
 
 
 def _verify_component(item, pages, vocab, new_values):
@@ -824,5 +840,3 @@ def parse_book(source, target, client=None, cache_dir=None):
         "new_vocabulary": {key: sorted(value) for key, value in new_values.items()},
         "sections_found": len(sections),
     }
-
-

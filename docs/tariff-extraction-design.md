@@ -1248,6 +1248,21 @@ Scratch database `tariff_11c_scratch` is a copy of primary with the 14 hand-writ
 
 45 sections returned `end_turn`. Outdoor Lighting stopped at `max_tokens` and was queued `model_output_incomplete` with no partial rows. L.P.S. and R.P.S. R.A.C. were queued `unreadable_pages` (PDF pages 49–55) and were not sent to the model. Every `end_turn` section put an ISO date in `effective_date` (25 of them `2025-01-01`). That string is not printed on the page — the book prints "January 1, 2025" — so the verifier queued `quote_not_found` on the effective date and stored no version. Component checks did not run. `validate_drafts` had no drafts to accept or refuse. Nothing was activated. The scratch AI set is empty.
 
+### Date-verification follow-up
+
+The effective-date verifier parses the model value as a calendar date, then requires that
+date to appear on an individual page in the section as a full month name, an unpadded day,
+a comma, and a four-digit year (for example, `January 1, 2025`). No abbreviated-month,
+numeric, or ISO printed forms are accepted. A date absent from the section still queues as
+`quote_not_found`; an unparseable or invalid date queues as `effective_date_unparsed`.
+Component quote, rate-on-page, and rule-quote checks are unchanged.
+
+The requested cache replay, Postgres scratch activation, spot-checks, and AI-vs-handwritten
+diff were not run in this workspace: the source PDF and Sonnet cache are absent, and no
+local Postgres service is available. The replay call count, verified/queued totals,
+validation outcomes, spot-check values, and diff therefore remain unverified here; no
+model call was made and no scratch database was changed.
+
 Against the hand-written primary set (14 active versions, 162 components, 56 rules) the agreement count is 0. There is no stored-rate disagreement. All 162 hand-written components are only on the hand-written side. No AI schedule was stored, including the book sections the hand-written parser does not cover. For GS-TOD sheet 13-1 the model proposed primary-voltage on-peak energy as 0.05574, 0.03987, and 0.09562 dollars (printed 5.574¢, 3.987¢, and 9.562¢). It did not propose 9.561¢. None of the three were stored.
 
 Primary was not modified: Appalachian 14 versions / 162 components, Dominion 41 versions / 448 components. Local suite after this run: 381 passed.

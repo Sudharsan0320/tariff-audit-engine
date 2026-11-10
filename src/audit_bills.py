@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 try:
     from src import db
 except ImportError:
@@ -19,6 +20,7 @@ if __package__:
         evaluate_component,
         evaluate_component_group,
         evaluate_schedule_components,
+        apply_structured_demand_rules,
         resolve_period_version,
         round_money,
     )
@@ -30,6 +32,7 @@ else:
         evaluate_component,
         evaluate_component_group,
         evaluate_schedule_components,
+        apply_structured_demand_rules,
         resolve_period_version,
         round_money,
     )
@@ -99,6 +102,16 @@ def load_mapping(mapping_path=DEFAULT_MAPPING_PATH):
         if disposition == DIRECT and not entry.get("component_type"):
             raise ValueError(
                 f"Direct mapping for {label!r} must name a component_type."
+            )
+        if disposition == DIRECT and entry.get("determinant_type") not in {
+            None,
+            "total_consumption",
+            "on_peak_usage",
+            "off_peak_usage",
+            "demand",
+        }:
+            raise ValueError(
+                f"Direct mapping for {label!r} has an unsupported determinant_type."
             )
         if disposition == OUT_OF_SCOPE and not entry.get("reason"):
             raise ValueError(
@@ -217,6 +230,389 @@ def _rules_for_version(conn, version_id):
     return [_row_dict(cursor, row) for row in cursor.fetchall()]
 
 
+def _structured_rules_for_versions(conn, version_ids):
+    if not version_ids:
+        return []
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'structured_tariff_rules'"
+    ).fetchone()
+    if not table_exists:
+        return []
+    placeholders = ", ".join("?" for _ in version_ids)
+    cursor = conn.execute(
+        f"""
+        SELECT id, tariff_version_id, rule_type, applies_to_schedule,
+               applies_to_version_id, parameters_json, source_rule_text,
+               source_page, citation_status
+        FROM structured_tariff_rules
+        WHERE tariff_version_id IN ({placeholders})
+        ORDER BY id
+        """,
+        tuple(version_ids),
+    )
+    return [_row_dict(cursor, row) for row in cursor.fetchall()]
+
+
+def _is_rider_candidate(schedule_code, components, rules):
+    code = schedule_code.casefold()
+    component_types = " ".join(
+        str(component.get("component_type") or "").casefold()
+        for component in components
+    )
+    component_categories = " ".join(
+        str(component.get("billing_category") or "").casefold()
+        for component in components
+    )
+    rule_text = " ".join(rule["rule_text"].casefold() for rule in rules)
+    return (
+        code.startswith("rider ")
+        or "rac" in code
+        or code.startswith(("drs", "nms", "nrec", "rec", "ssp"))
+        or any(
+            marker in component_types
+            for marker in ("rider_", "rac", "fuel_charge_rider")
+        )
+        or (
+            bool(components)
+            and any(rule["rule_type"] == "applicable_schedule_charges" for rule in rules)
+        )
+        or (bool(components) and "rider" in rule_text)
+        or any(
+            rule["rule_type"] == "eligibility"
+            and "rider applies" in rule["rule_text"].casefold()
+            for rule in rules
+        )
+        or any(
+            marker in f"{component_categories} {rule_text}"
+            for marker in (
+                "surcharge",
+                "net metering",
+                "demand response service",
+                "renewable energy credit",
+                "wind, water and sunlight",
+                "universal service fee",
+                "shared solar",
+            )
+        )
+    )
+
+
+def _rider_applicability_reason(
+    bill,
+    base_version,
+    rider_version,
+    rider_code,
+    components,
+    rules,
+    mapping,
+    base_is_residential,
+):
+    bill_from = str(bill["bill_from"])
+    bill_to = str(bill["bill_to"])
+    effective_from = str(rider_version["effective_from"])
+    effective_to = rider_version["effective_to"]
+    if bill_from < effective_from or (
+        effective_to is not None and bill_to >= str(effective_to)
+    ):
+        return (
+            "excluded",
+            f"Effective range {effective_from} through "
+            f"{effective_to or 'open-ended'} does not cover the full bill period.",
+        )
+
+    rule_text = " ".join(rule["rule_text"] for rule in rules).casefold()
+    if ("demand-metered" in rule_text or "demand metered" in rule_text) and (
+        bill.get("demand_kw") is None
+    ):
+        return (
+            "excluded",
+            "Stored eligibility requires demand-metered service; this bill has no demand.",
+        )
+    features = _mapping_string_set(mapping, "account_features")
+    if "curtail" in rule_text and not any(
+        any(
+            term in feature
+            for term in ("curtail", "interruptible", "demand response")
+        )
+        for feature in features
+    ):
+        return (
+            "excluded",
+            "Stored eligibility requires load-curtailment participation; none is recorded.",
+        )
+    participating_riders = _mapping_string_set(mapping, "participating_riders")
+    if "voluntary" in rule_text and rider_code.casefold() not in participating_riders:
+        return (
+            "excluded",
+            "Stored terms require voluntary participation; no election is recorded.",
+        )
+    non_participating_riders = _mapping_string_set(
+        mapping, "non_participating_riders"
+    )
+    if "non-participating" in rule_text and rider_code.casefold() in non_participating_riders:
+        return (
+            "excluded",
+            "The account is explicitly marked as non-participating.",
+        )
+    if "interconnection customer" in rule_text and not any(
+        any(term in feature for term in ("interconnection", "generating facility"))
+        for feature in features
+    ):
+        return (
+            "excluded",
+            "Stored eligibility requires an interconnection or generating facility; none is recorded.",
+        )
+    if "commercial and industrial customers" in rule_text and base_is_residential:
+        return (
+            "excluded",
+            "Stored eligibility is limited to commercial and industrial service; the billed schedule is residential.",
+        )
+
+    schedule_code = base_version["schedule_code"]
+    normalized_code = re.escape(schedule_code.casefold())
+    category_matches = [
+        component
+        for component in components
+        if re.search(
+            rf"(?<![a-z0-9]){normalized_code}(?![a-z0-9])",
+            str(component.get("billing_category") or "").casefold(),
+        )
+    ]
+    if category_matches:
+        return (
+            "included",
+            "A stored component billing_category explicitly names the billed schedule.",
+        )
+
+    residential_category = any(
+        "residential" in str(component.get("billing_category") or "").casefold()
+        for component in components
+    )
+    general_applicability = any(
+        phrase in rule_text
+        for phrase in (
+            "all customer bills",
+            "all customer service",
+            "applicable standard schedules",
+        )
+    )
+    if base_is_residential and residential_category and general_applicability:
+        return (
+            "included",
+            "Stored residential component category and general standard-schedule applicability cover this residential account.",
+        )
+
+    universal_fee = (
+        "universal service fee" in rule_text
+        and "all customer service" in rule_text
+        and any(
+            "universal service fee"
+            in str(component.get("billing_category") or "").casefold()
+            for component in components
+        )
+    )
+    if universal_fee:
+        return (
+            "included",
+            "Stored Universal Service Fee rule applies to all customer service under applicable schedules.",
+        )
+    return (
+        "excluded",
+        "Stored applicability evidence does not establish coverage for this schedule and account.",
+    )
+
+
+def _base_is_residential(conn, base_version):
+    return any(
+        "residential" in rule["rule_text"].casefold()
+        for rule in _rules_for_version(conn, base_version["id"])
+        if rule["rule_type"] == "eligibility"
+    )
+
+
+def _rider_decisions(conn, bill, base_version, mapping):
+    version_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(tariff_versions)").fetchall()
+    }
+    kind_column = "schedule_kind" if "schedule_kind" in version_columns else "NULL"
+    rows = conn.execute(
+        f"""
+        SELECT id, state, utility, schedule_code, version,
+               effective_from, effective_to, status, {kind_column}
+        FROM tariff_versions
+        WHERE state = ? AND utility = ? AND status = 'active'
+          AND schedule_code != ?
+        ORDER BY schedule_code
+        """,
+        (base_version["state"], base_version["utility"], base_version["schedule_code"]),
+    ).fetchall()
+    decisions = []
+    included = []
+    base_is_residential = _base_is_residential(conn, base_version)
+    for (
+        version_id,
+        state,
+        utility,
+        schedule_code,
+        version,
+        effective_from,
+        effective_to,
+        status,
+        schedule_kind,
+    ) in rows:
+        components = _components_for_version(conn, version_id)
+        version_rules = _rules_for_version(conn, version_id)
+        if (
+            schedule_kind is None
+            and schedule_code == mapping["alternative_schedule"]["schedule_code"]
+        ):
+            continue
+        is_rider = (
+            schedule_kind == "rider"
+            if schedule_kind is not None
+            else _is_rider_candidate(schedule_code, components, version_rules)
+        )
+        if not is_rider:
+            continue
+        decision, reason = _rider_applicability_reason(
+            bill,
+            base_version,
+            {
+                "effective_from": effective_from,
+                "effective_to": effective_to,
+            },
+            schedule_code,
+            components,
+            version_rules,
+            mapping,
+            base_is_residential,
+        )
+        decisions.append(
+            {
+                "schedule_code": schedule_code,
+                "status": decision,
+                "reason": reason,
+                "effective_from": effective_from,
+                "effective_to": effective_to,
+            }
+        )
+        if decision == "included":
+            included.append(
+                (
+                    {
+                        "id": version_id,
+                        "state": state,
+                        "utility": utility,
+                        "schedule_code": schedule_code,
+                        "version": version,
+                        "effective_from": effective_from,
+                        "effective_to": effective_to,
+                        "status": status,
+                    },
+                    components,
+                    version_rules,
+                )
+            )
+    return included, decisions
+
+
+def _optional_provision(component, rules):
+    category = str(component.get("billing_category") or "")
+    optional_rule_cues = (
+        "optional",
+        "no longer available to new customers",
+        "existing customers may remain",
+        "customer election",
+    )
+    for rule in rules:
+        text = rule["rule_text"].casefold()
+        if not any(cue in text for cue in optional_rule_cues):
+            continue
+        match = re.split(
+            r"\b(?:energy|demand|basic service|monthly|generation|distribution|total)\b",
+            category,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip(" -:()")
+        if match and match.casefold() in text:
+            return match
+    return None
+
+
+def _mapping_string_set(mapping, key):
+    values = mapping.get(key, [])
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value.strip() for value in values
+    ):
+        raise ValueError(f"{key} must be a list of non-empty strings.")
+    return {value.casefold().strip() for value in values}
+
+
+def _filter_optional_provisions(components, rules, mapping):
+    normalized = _mapping_string_set(mapping, "applicable_provisions")
+    return [
+        component
+        for component in components
+        if (
+            (provision := _optional_provision(component, rules)) is None
+            or provision.casefold().strip() in normalized
+        )
+    ]
+
+
+def _filter_applicable_billing_categories(components, mapping):
+    categories = _mapping_string_set(mapping, "applicable_billing_categories")
+    if not categories:
+        return components
+    available = {
+        str(component.get("billing_category") or "").casefold().strip()
+        for component in components
+    }
+    missing = categories - available
+    if missing:
+        raise ValueError(
+            "Selected billing categories do not exist on the active schedule: "
+            + ", ".join(sorted(missing))
+        )
+    return [
+        component
+        for component in components
+        if str(component.get("billing_category") or "").casefold().strip()
+        in categories
+    ]
+
+
+def _rider_components_for_schedule(
+    components, schedule_code, base_is_residential, rules, mapping
+):
+    schedule_is_tod = bool(re.search(r"\b(?:tod|tou)\b", schedule_code, re.IGNORECASE))
+    selected = []
+    for component in components:
+        category = str(component.get("billing_category") or "")
+        normalized_category = category.casefold()
+        category_is_tod = bool(re.search(r"\b(?:tod|tou)\b", category, re.IGNORECASE))
+        category_names_schedule = bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(schedule_code.casefold())}(?![a-z0-9])",
+                normalized_category,
+            )
+        )
+        universal_fee = "universal service fee" in normalized_category
+        residential = "residential" in normalized_category and base_is_residential
+        if (
+            category == schedule_code
+            or universal_fee
+            or (
+                category_names_schedule
+                and category_is_tod == schedule_is_tod
+            )
+            or (residential and category_is_tod == schedule_is_tod)
+        ):
+            selected.append(component)
+    return _filter_optional_provisions(selected, rules, mapping)
+
+
 def _tariff_data(conn, bill, mapping):
     base_version = resolve_period_version(
         conn,
@@ -227,40 +623,39 @@ def _tariff_data(conn, bill, mapping):
         utility=mapping["tariff_identity"]["utility"],
     )
     versions = [base_version]
-    schedule_components = _components_for_version(conn, base_version["id"])
-    components = list(schedule_components)
     rules = {base_version["id"]: _rules_for_version(conn, base_version["id"])}
-
-    rider_codes = [
-        row[0]
-        for row in conn.execute(
-            """
-            SELECT DISTINCT schedule_code FROM tariff_versions
-            WHERE state = ? AND utility = ? AND status = 'active'
-              AND schedule_code LIKE 'RIDER %'
-            ORDER BY schedule_code
-            """,
-            (base_version["state"], base_version["utility"]),
-        )
-    ]
+    schedule_components = _filter_optional_provisions(
+        _components_for_version(conn, base_version["id"]),
+        rules[base_version["id"]],
+        mapping,
+    )
+    schedule_components = _filter_applicable_billing_categories(
+        schedule_components, mapping
+    )
+    structured_rules = _structured_rules_for_versions(conn, [base_version["id"]])
+    bill["determinants"] = apply_structured_demand_rules(
+        schedule_components,
+        bill["determinants"],
+        bill["bill_to"],
+        structured_rules,
+    )
+    components = list(schedule_components)
+    included_riders, rider_applicability = _rider_decisions(
+        conn, bill, base_version, mapping
+    )
     rider_components = []
-    for rider_code in rider_codes:
-        rider_version = resolve_period_version(
-            conn,
-            rider_code,
-            bill["bill_from"],
-            bill["bill_to"],
-            state=base_version["state"],
-            utility=base_version["utility"],
-        )
+    base_is_residential = _base_is_residential(conn, base_version)
+    for rider_version, components_for_rider, rider_rules in included_riders:
         versions.append(rider_version)
-        rules[rider_version["id"]] = _rules_for_version(
-            conn, rider_version["id"]
-        )
+        rules[rider_version["id"]] = rider_rules
         rider_components.extend(
-            component
-            for component in _components_for_version(conn, rider_version["id"])
-            if component["billing_category"] == bill["schedule_code"]
+            _rider_components_for_schedule(
+                components_for_rider,
+                bill["schedule_code"],
+                base_is_residential,
+                rider_rules,
+                mapping,
+            )
         )
     components.extend(rider_components)
 
@@ -292,6 +687,10 @@ def _tariff_data(conn, bill, mapping):
         out = {k: v for k, v in row.items() if k != "id"}
         if "tariff_version_id" in out:
             out["tariff_version_id"] = version_keys[out["tariff_version_id"]]
+        if "applies_to_version_id" in out:
+            out["applies_to_version_id"] = version_keys.get(
+                out["applies_to_version_id"], out["applies_to_version_id"]
+            )
         return out
 
     def canonical(rows):
@@ -310,6 +709,9 @@ def _tariff_data(conn, bill, mapping):
         "rules": canonical(
             rule for version_rules in rules.values() for rule in version_rules
         ),
+        "structured_rules": canonical(
+            _structured_rules_for_versions(conn, list(version_keys))
+        ),
     }
     serialized_snapshot = json.dumps(
         snapshot, sort_keys=True, default=_json_default, separators=(",", ":")
@@ -318,6 +720,7 @@ def _tariff_data(conn, bill, mapping):
         "base_version": base_version,
         "schedule_components": schedule_components,
         "rider_components": rider_components,
+        "rider_applicability": rider_applicability,
         "components": components,
         "rules": rules,
         "alternative_version": alternative_version,
@@ -332,6 +735,10 @@ def _find_mapping_component(entry, components, label):
         for component in components
         if component["component_type"] == entry["component_type"]
         and component["variant"] == entry.get("variant")
+        and (
+            "billing_category" not in entry
+            or component["billing_category"] == entry["billing_category"]
+        )
     ]
     if not candidates:
         raise ValueError(
@@ -349,7 +756,12 @@ def _find_mapping_component(entry, components, label):
     return candidates
 
 
-def _evaluate_mapped_component(candidates, determinants):
+def _evaluate_mapped_component(candidates, determinants, determinant_type=None):
+    if determinant_type is not None:
+        candidates = [
+            {**component, "determinant_type": determinant_type}
+            for component in candidates
+        ]
     if len(candidates) == 1:
         component = candidates[0]
         if component.get("tier_min") is not None or component.get("tier_max") is not None:
@@ -359,7 +771,9 @@ def _evaluate_mapped_component(candidates, determinants):
 
 
 def _direct_result(bill, label, charge, entry, candidates):
-    raw_expected = _evaluate_mapped_component(candidates, bill["determinants"])
+    raw_expected = _evaluate_mapped_component(
+        candidates, bill["determinants"], entry.get("determinant_type")
+    )
     expected = round_money(raw_expected)
     billed = round_money(as_decimal(charge["amount"]))
     delta = billed - expected
@@ -373,11 +787,22 @@ def _direct_result(bill, label, charge, entry, candidates):
         verdict = "MATCH"
     component = candidates[0]
     variant = component.get("variant")
-    determinant_type = (
+    determinant_type = entry.get("determinant_type") or (
         {"on_peak": "on_peak_usage", "off_peak": "off_peak_usage"}.get(
-            variant, "total_consumption"
+            variant,
+            {
+                "on_peak_energy_charge": "on_peak_usage",
+                "off_peak_energy_charge": "off_peak_usage",
+            }.get(component.get("component_type"), "total_consumption"),
         )
     )
+    determinant_value = bill["determinants"].get(determinant_type, "")
+    if component["unit"] == "usd_per_kw":
+        determinant_type = entry.get("determinant_type") or "demand"
+        component_demands = bill["determinants"].get("demand_by_component_type", {})
+        determinant_value = component_demands.get(
+            component["component_type"], bill["determinants"].get("demand", "")
+        )
     detail = {
         "evidence": entry["evidence"],
         "component_type": entry["component_type"],
@@ -385,8 +810,10 @@ def _direct_result(bill, label, charge, entry, candidates):
         "rate": str(as_decimal(component["rate"])),
         "unit": component["unit"],
         "determinant_type": determinant_type,
-        "determinant_value": str(bill["determinants"].get(determinant_type, "")),
+        "determinant_value": str(determinant_value),
     }
+    if "billing_category" in entry:
+        detail["billing_category"] = entry["billing_category"]
     return {
         "bill_charge_id": charge["id"],
         "line_label": label,
@@ -435,13 +862,29 @@ def _out_of_scope_result(label, charge, entry):
 
 def _missing_result(label, entry, candidates, determinants):
     expected = round_money(
-        _evaluate_mapped_component(candidates, determinants)
+        _evaluate_mapped_component(
+            candidates, determinants, entry.get("determinant_type")
+        )
     )
     component = candidates[0]
     variant = component.get("variant")
-    determinant_type = {"on_peak": "on_peak_usage", "off_peak": "off_peak_usage"}.get(
-        variant, "total_consumption"
+    determinant_type = entry.get("determinant_type") or {
+        "on_peak": "on_peak_usage",
+        "off_peak": "off_peak_usage",
+    }.get(
+        variant,
+        {
+            "on_peak_energy_charge": "on_peak_usage",
+            "off_peak_energy_charge": "off_peak_usage",
+        }.get(component.get("component_type"), "total_consumption"),
     )
+    determinant_value = determinants.get(determinant_type, "")
+    if component["unit"] == "usd_per_kw":
+        determinant_type = entry.get("determinant_type") or "demand"
+        component_demands = determinants.get("demand_by_component_type", {})
+        determinant_value = component_demands.get(
+            component["component_type"], determinants.get("demand", "")
+        )
     return {
         "bill_charge_id": None,
         "line_label": label,
@@ -458,7 +901,7 @@ def _missing_result(label, entry, candidates, determinants):
             "rate": str(as_decimal(component["rate"])),
             "unit": component["unit"],
             "determinant_type": determinant_type,
-            "determinant_value": str(determinants.get(determinant_type, "")),
+            "determinant_value": str(determinant_value),
         },
     }
 
@@ -486,7 +929,31 @@ def _line_flag(line):
     return None
 
 
-def _schedule_totals(conn, components, determinants, bill_to, version_id, billing_class=None):
+def _structured_minimum_charge_rule(conn, version_id):
+    schedule_row = conn.execute(
+        "SELECT schedule_code FROM tariff_versions WHERE id = ?", (version_id,)
+    ).fetchone()
+    if schedule_row is None:
+        raise ValueError(f"Tariff version {version_id} does not exist.")
+    rules = [
+        rule
+        for rule in _structured_rules_for_versions(conn, [version_id])
+        if rule["rule_type"] == "minimum_charge"
+        and rule["applies_to_schedule"] == schedule_row[0]
+        and rule["applies_to_version_id"] == version_id
+    ]
+    if len(rules) > 1:
+        raise ValueError(
+            f"Tariff version {version_id} has multiple applicable structured "
+            "minimum-charge rules."
+        )
+    return rules[0] if rules else None
+
+
+def _schedule_totals(
+    conn, components, determinants, bill_to, version_id, billing_class=None,
+    rules=None,
+):
     items = evaluate_schedule_components(
         conn,
         components,
@@ -495,11 +962,65 @@ def _schedule_totals(conn, components, determinants, bill_to, version_id, billin
         billing_class=billing_class,
         version_id=version_id,
     )
-    total = sum((as_decimal(item["amount"]) for item in items), Decimal(0))
-    return items, round_money(total)
+    subtotal = round_money(
+        sum((as_decimal(item["amount"]) for item in items), Decimal(0))
+    )
+    minimum_status = _minimum_charge_status(
+        rules or [],
+        structured_rule=_structured_minimum_charge_rule(conn, version_id),
+        pre_floor_subtotal=subtotal,
+    )
+    total = subtotal
+    if minimum_status["status"] == "evaluated":
+        total = as_decimal(minimum_status["post_floor_subtotal"])
+        if minimum_status["bound"]:
+            items.append(
+                {
+                    "component_type": "minimum_charge_adjustment",
+                    "amount": str(total - subtotal),
+                    "source_page": minimum_status["source_page"],
+                }
+            )
+    return items, total, minimum_status
 
 
-def _minimum_charge_status(rules):
+def _minimum_charge_status(
+    rules, structured_rule=None, pre_floor_subtotal=None
+):
+    if structured_rule is not None:
+        if structured_rule["citation_status"] != "cited" or structured_rule[
+            "source_page"
+        ] is None:
+            return {
+                "status": "uncited",
+                "reason": "The structured minimum-charge rule has no page citation.",
+                "rule": structured_rule["source_rule_text"],
+            }
+        parameters = json.loads(structured_rule["parameters_json"])
+        if not isinstance(parameters, dict):
+            raise ValueError("Structured minimum-charge parameters must be an object.")
+        if parameters.get("unit") != "usd_per_month":
+            raise ValueError(
+                "Structured minimum-charge rule must use usd_per_month."
+            )
+        floor = round_money(as_decimal(parameters.get("value")))
+        if floor < 0:
+            raise ValueError("Structured minimum-charge value cannot be negative.")
+        if pre_floor_subtotal is None:
+            raise ValueError(
+                "A pre-floor subtotal is required to evaluate a minimum charge."
+            )
+        subtotal = round_money(pre_floor_subtotal)
+        bound = subtotal < floor
+        return {
+            "status": "evaluated",
+            "floor": str(floor),
+            "pre_floor_subtotal": str(subtotal),
+            "bound": bound,
+            "post_floor_subtotal": str(max(subtotal, floor)),
+            "source_page": structured_rule["source_page"],
+            "rule": structured_rule["source_rule_text"],
+        }
     minimum_rules = [
         rule for rule in rules if rule["rule_type"] == "minimum_charge"
     ]
@@ -650,21 +1171,23 @@ def _compute_bill_audit(conn, bill_id, mapping, mapping_hash):
             }
         )
 
-    primary_items, primary_schedule_total = _schedule_totals(
+    primary_items, primary_schedule_total, minimum_charge_status = _schedule_totals(
         conn,
         tariff["schedule_components"],
         bill["determinants"],
         bill["bill_to"],
         tariff["base_version"]["id"],
+        rules=base_rules,
     )
     alternative = mapping["alternative_schedule"]
-    alternative_items, alternative_total = _schedule_totals(
+    alternative_items, alternative_total, _ = _schedule_totals(
         conn,
         tariff["alternative_components"],
         bill["determinants"],
         bill["bill_to"],
         tariff["alternative_version"]["id"],
         billing_class=alternative.get("billing_class"),
+        rules=tariff["rules"][tariff["alternative_version"]["id"]],
     )
     price_difference = primary_schedule_total - alternative_total
     alternative_is_cheaper = price_difference > CENT
@@ -732,6 +1255,7 @@ def _compute_bill_audit(conn, bill_id, mapping, mapping_hash):
         },
         "mapping_version": mapping["mapping_version"],
         "tariff_snapshot_hash": tariff["snapshot_hash"],
+        "rider_applicability": tariff["rider_applicability"],
         "lines": line_results,
         "like_for_like_totals": {
             "billed": str(billed_total),
@@ -752,7 +1276,7 @@ def _compute_bill_audit(conn, bill_id, mapping, mapping_hash):
             "primary_components": primary_items,
             "alternative_components": alternative_items,
         },
-        "minimum_charge": _minimum_charge_status(base_rules),
+        "minimum_charge": minimum_charge_status,
         "conditional_components": _conditional_components(tariff),
         "price_anomaly": {
             "status": "not_evaluable",

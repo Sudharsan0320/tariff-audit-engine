@@ -72,6 +72,12 @@ cur.execute(
     version_values[:5],
 )
 existing_version = cur.fetchone()
+if existing_version is not None:
+    cur.execute(
+        "UPDATE tariff_versions SET schedule_kind = 'schedule' WHERE id = ?",
+        (existing_version[0],),
+    )
+    conn.commit()
 if existing_version is not None and existing_version[1] != "draft":
     print(
         f"already {existing_version[1]}, skipped: schedule {args.schedule_code} "
@@ -82,8 +88,8 @@ if existing_version is None:
     cur.execute(
         """
         INSERT INTO tariff_versions(
-            state, utility, schedule_code, version, effective_from, status
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            state, utility, schedule_code, version, effective_from, status, schedule_kind
+        ) VALUES (?, ?, ?, ?, ?, ?, 'schedule')
         """,
         version_values,
     )

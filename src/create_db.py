@@ -27,9 +27,24 @@ CREATE TABLE IF NOT EXISTS tariff_versions (
     version INTEGER NOT NULL,
     effective_from DATE NOT NULL,
     effective_to DATE,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    schedule_kind TEXT CHECK (
+        schedule_kind IN ('schedule', 'rider', 'informational')
+    ),
+    schedule_kind_evidence TEXT
 );
 """)  # """ closes the SQL string; ) closes the execute( call
+
+version_columns = {
+    row[1] for row in cur.execute("PRAGMA table_info(tariff_versions)").fetchall()
+}
+if "schedule_kind" not in version_columns:
+    cur.execute(
+        "ALTER TABLE tariff_versions ADD COLUMN schedule_kind TEXT "
+        "CHECK (schedule_kind IN ('schedule', 'rider', 'informational'))"
+    )
+if "schedule_kind_evidence" not in version_columns:
+    cur.execute("ALTER TABLE tariff_versions ADD COLUMN schedule_kind_evidence TEXT")
 
 # --- tariff_components: one row per individual rate, linked to its version ---
 # Column by column:
@@ -76,7 +91,41 @@ CREATE TABLE IF NOT EXISTS tariff_rules (
     tariff_version_id INTEGER NOT NULL,
     rule_type TEXT NOT NULL,
     rule_text TEXT NOT NULL,
+    source_page INTEGER,
+    citation_status TEXT,
     FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id)
+);
+""")
+
+rule_columns = {
+    row[1] for row in cur.execute("PRAGMA table_info(tariff_rules)").fetchall()
+}
+if "source_page" not in rule_columns:
+    cur.execute("ALTER TABLE tariff_rules ADD COLUMN source_page INTEGER")
+if "citation_status" not in rule_columns:
+    cur.execute("ALTER TABLE tariff_rules ADD COLUMN citation_status TEXT")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS structured_tariff_rules (
+    id INTEGER PRIMARY KEY,
+    tariff_version_id INTEGER NOT NULL,
+    rule_type TEXT NOT NULL,
+    applies_to_schedule TEXT NOT NULL,
+    applies_to_version_id INTEGER NOT NULL,
+    parameters_json TEXT NOT NULL,
+    source_rule_text TEXT NOT NULL,
+    source_page INTEGER,
+    citation_status TEXT NOT NULL
+        CHECK (citation_status IN ('cited', 'uncited')),
+    CHECK (
+        (citation_status = 'cited' AND source_page IS NOT NULL)
+        OR (citation_status = 'uncited' AND source_page IS NULL)
+    ),
+    UNIQUE (
+        tariff_version_id, rule_type, applies_to_schedule, applies_to_version_id
+    ),
+    FOREIGN KEY (tariff_version_id) REFERENCES tariff_versions(id),
+    FOREIGN KEY (applies_to_version_id) REFERENCES tariff_versions(id)
 );
 """)
 

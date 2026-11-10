@@ -40,13 +40,18 @@ def create_cross_reference_versions(conn, inventory):
                 (STATE, UTILITY, code, VERSION, effective_from),
             ).fetchone()
             if existing is not None:
+                conn.execute(
+                    "UPDATE tariff_versions SET schedule_kind = 'informational' WHERE id = ?",
+                    (existing[0],),
+                )
                 skipped.append((code, existing[0], existing[1]))
                 continue
             cursor = conn.execute(
                 """
                 INSERT INTO tariff_versions(
-                    state, utility, schedule_code, version, effective_from, status
-                ) VALUES (?, ?, ?, ?, ?, 'draft')
+                    state, utility, schedule_code, version, effective_from, status,
+                    schedule_kind
+                ) VALUES (?, ?, ?, ?, ?, 'draft', 'informational')
                 """,
                 (STATE, UTILITY, code, VERSION, effective_from),
             )

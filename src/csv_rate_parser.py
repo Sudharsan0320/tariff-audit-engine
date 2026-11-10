@@ -82,6 +82,10 @@ def parse_csv(source, database_path, *, state, utility):
                     "ORDER BY id DESC LIMIT 1",
                     (state, utility, code, version, effective_from)).fetchone()
                 if existing is not None:
+                    conn.execute(
+                        "UPDATE tariff_versions SET schedule_kind = 'schedule' WHERE id = ?",
+                        (existing[0],),
+                    )
                     stored = conn.execute(
                         "SELECT component_type, unit, rate, source_page, source_cell "
                         "FROM tariff_components WHERE tariff_version_id = ?",
@@ -95,7 +99,7 @@ def parse_csv(source, database_path, *, state, utility):
                     continue
                 version_id = conn.execute(
                     "INSERT INTO tariff_versions(state, utility, schedule_code, version, "
-                    "effective_from, status) VALUES (?, ?, ?, ?, ?, 'draft')",
+                    "effective_from, status, schedule_kind) VALUES (?, ?, ?, ?, ?, 'draft', 'schedule')",
                     (state, utility, code, version, effective_from)).lastrowid
                 for ctype, unit, rate, page, cell in components:
                     conn.execute(

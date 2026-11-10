@@ -1,14 +1,20 @@
-# Python cache and virtual environments
-__pycache__/
-*.pyc
-venv/
-
-# Data files are never committed
-data/
-
-# macOS junk
-.DS_Store
-
 # Secrets
 .env
+
+# Agent tooling
+.copilot/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Project data: databases, backups, PDFs, extraction caches
+data/
+
+# Tests are local-only
 tests/
+
+# macOS
+.DS_Store

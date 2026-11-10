@@ -408,7 +408,7 @@ async function viewUpload() {
       <input id="t-code" placeholder="Code, e.g. 110 or T-CM" size="20"></div><div class="s" id="tariff-file"></div></div>
   </div>
   <input type="file" id="file-bill" accept="application/pdf" hidden><input type="file" id="file-tariff" accept="application/pdf" hidden>
-  <div id="upload-msg"></div>`;
+  <div id="upload-msg">${await pastUploads()}</div>`;
 }
 async function doUpload(kind, file) {
   const out = document.getElementById("upload-msg"); if (!file) return;
@@ -422,8 +422,28 @@ async function doUpload(kind, file) {
   }
   try {
     const r = await api(url, { method: "POST", body: fd });
-    out.innerHTML = okCard("Accepted", `<dl class="kv">${Object.entries(r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(typeof v === "object" ? JSON.stringify(v) : v)}</dd>`).join("")}</dl>`);
-  } catch (e) { out.innerHTML = alertCard(e, "Upload refused"); }
+    out.innerHTML = uploadCard(r.plain, true, r.status) + await pastUploads();
+  } catch (e) {
+    const plain = e instanceof ApiError && e.body && e.body.plain;
+    out.innerHTML = (plain ? uploadCard(plain, false, "HTTP " + e.status) : alertCard(e, "Upload refused")) + await pastUploads();
+  }
+}
+function plainFields(p) {
+  const place = p.state ? `${p.company}, ${p.state}` : p.company;
+  return `<p><b>${esc(place)}</b> · Document: ${esc(p.kind)}</p><p>${esc(p.outcome)}</p>`;
+}
+function uploadCard(p, ok, raw) {
+  if (!p) return "";
+  const more = `<p class="muted">Technical detail: ${esc(raw || p.status || "")}${p.detail ? " — " + esc(p.detail) : ""}</p>`;
+  const body = plainFields(p) + more;
+  return ok ? okCard("Upload result", body) : `<div class="alert" role="alert"><b>Upload not loaded</b> ${body}</div>`;
+}
+async function pastUploads() {
+  try {
+    const rows = await api("/uploads");
+    if (!rows.length) return "";
+    return `<h2>Past uploads</h2><div class="uploads">${rows.map(r => `<div class="card"><div class="k">${esc(r.file || "")}</div>${plainFields(r)}<p class="muted">Technical detail: ${esc(r.status || "")}</p></div>`).join("")}</div>`;
+  } catch (e) { return ""; }
 }
 
 /* ---------- actions ---------- */

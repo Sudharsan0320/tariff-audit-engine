@@ -50,10 +50,17 @@ FULL_MONTHS = (
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 )
-NUMBER = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+")
+NUMBER = re.compile(
+    r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+"
+)
+NEGATIVE_NUMBER = re.compile(
+    r"(?<![\d.])-(?:\$)?(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+)"
+)
 SHEET = re.compile(
     r"Sheet(?:\s+No\.)?\s+((?:NBP[\s-]*)?\d+[A-Z]?(?:\s*\.?\s*-\s*\d+)?)", re.I)
 HEADING = re.compile(r"^(SCHEDULE|OPTIONAL RIDER|NBP-?\s*RIDER|RIDER)\s+(\S.*?)\s*$", re.I)
+CONTENTS_ROW = re.compile(r"(?:\.{3,}|…)\s*Pages?\s+\S|\s(?:Pages?)\s+[A-Z]?-?\d[\d.\s–-]*$")
+CONTENTS_MIN_ROWS = 5
 EXHIBIT = re.compile(r"^EXHIBIT OF APPLICABLE RIDERS\b", re.I)
 INDEX_START = re.compile(r"^(Schedule|Optional Rider|Rider|NBP-Rider|Underground|Exhibit|Towns|Terms)\b")
 INDEX_TAIL = re.compile(
@@ -139,7 +146,10 @@ class AnthropicExtractor:
             )
         except Exception as error:
             kind = classify_api_failure(error)
+            status = getattr(error, "status_code", None)
             message = BILLING if kind == "billing" else UNAVAILABLE
+            if status and kind != "billing":
+                message = f"{message} (HTTP {status})"
             raise ExtractionUnavailable(message, kind) from None
         usage = message.usage
         for field in self.usage:
@@ -173,11 +183,28 @@ def read_pages(path):
     return pages
 
 
+CID_GLYPH = re.compile(r"\(cid:\d+\)")
+MIN_WORDS_WITH_GLYPHS = 50
+
+
 def readable(text):
+    """A page is readable when its extractable text is real content.
+
+    Unmapped-font glyphs ("(cid:n)") alone do not make a page unreadable: a page with a handful
+    is judged by its text as usual, and a page with many glyphs is readable only when real words
+    (three or more letters, glyphs removed) number at least MIN_WORDS_WITH_GLYPHS and outnumber
+    the glyphs. An image-only page whose text layer is just a filing stamp stays unreadable.
+    """
     if len(text.strip()) < 40:
         return False
     control = sum(1 for char in text if ord(char) < 32 and char not in "\r\n\t")
-    return control / len(text) < 0.05 and text.count("(cid:") < 5
+    if control / len(text) >= 0.05:
+        return False
+    glyphs = len(CID_GLYPH.findall(text))
+    if glyphs < 5:
+        return True
+    words = len(re.findall(r"[A-Za-z]{3,}", CID_GLYPH.sub(" ", text)))
+    return words >= MIN_WORDS_WITH_GLYPHS and words > glyphs
 
 
 def normalize_sheet(raw):
@@ -212,10 +239,33 @@ def heading_of(text):
     return None, None
 
 
+def _heading_line(text, caps_only):
+    """Like heading_of, but with `caps_only` a heading keyword must be printed in capitals."""
+    for line in text.splitlines()[:15]:
+        line = line.strip()
+        match = HEADING.match(line)
+        if match and (not caps_only or match.group(1) == match.group(1).upper()):
+            kind = "rider" if "RIDER" in match.group(1).upper() else "schedule"
+            return kind, match.group(2).strip()
+        if EXHIBIT.match(line):
+            return "exhibit", "Exhibit of Applicable Riders"
+    return None, None
+
+
+def is_contents_page(text):
+    """A contents/index page: many lines listing a designation with a page reference.
+
+    Such a page lists sections; it never starts one. Dot leaders or a trailing "Page n" /
+    "Pages n - m" on at least CONTENTS_MIN_ROWS lines marks it.
+    """
+    rows = sum(1 for line in text.splitlines() if CONTENTS_ROW.search(line))
+    return rows >= CONTENTS_MIN_ROWS
+
+
 def schedule_code(designation, kind=None):
     if kind == "exhibit":
         return "EXHIBIT"
-    text = designation.replace("–", "-").replace("—", "-")
+    text = re.sub(r"[\"'“”‘’]", "", designation).replace("–", "-").replace("—", "-")
     text = re.sub(r"\s*-\s*", "-", text).replace(".", "")
     text = re.sub(r"\s+", "", text).strip("-")
     return text or None
@@ -334,22 +384,40 @@ def chunk_pages(pages):
 
 
 def _heading_sections(pages):
-    sections, current = [], None
-    for page in pages:
-        if not readable(page["text"]):
-            if current is not None:
-                current["pages"].append(page)
-                current["page_numbers"].append(page["n"])
-            continue
-        kind, designation = heading_of(page["text"])
-        if kind and designation:
-            current = _section(kind, designation, "", [page])
-            if current["schedule_code"]:
-                sections.append(current)
-            continue
+    """Sections from section headings, for books with no table of contents of sheet ranges.
+
+    Generic rules: (1) a contents/index page never starts a section and belongs to none;
+    (2) when the book prints any heading in capitals, only capitalised headings start sections
+    — a mixed-case "Schedule X" line is a sub-table label or a reference inside a section;
+    (3) a designation that reads as prose (opens with a bracket, or runs past eight words) is
+    not a heading; (4) a heading whose code is already used by an earlier section never opens a
+    second section (it continues the open one), so two sections cannot share a version identity.
+    """
+    caps_only = any(
+        readable(page["text"]) and not is_contents_page(page["text"]) and _heading_line(page["text"], True)[0]
+        for page in pages)
+    sections, current, used_codes = [], None, set()
+
+    def attach(page):
         if current is not None:
             current["pages"].append(page)
             current["page_numbers"].append(page["n"])
+
+    for page in pages:
+        if readable(page["text"]) and is_contents_page(page["text"]):
+            continue
+        if not readable(page["text"]):
+            attach(page)
+            continue
+        kind, designation = _heading_line(page["text"], caps_only)
+        if kind and designation and not (designation.startswith(("(", "[")) or len(designation.split()) > 8):
+            code = schedule_code(designation, kind)
+            if code and code not in used_codes:
+                used_codes.add(code)
+                current = _section(kind, designation, "", [page])
+                sections.append(current)
+                continue
+        attach(page)
     return sections
 
 
@@ -361,9 +429,26 @@ def sections_of(path):
              "page_numbers": list(s["page_numbers"]), "name": s["name"]} for s in sections], unreadable
 
 
+SPACED_DECIMAL = re.compile(r"\d+\.\s+\d{1,4}")
+
+
 def numbers_on(text):
+    """Numbers printed on a page, including a decimal point the extractor split from its fraction."""
     found = []
+    covered = []
+    for match in SPACED_DECIMAL.finditer(text or ""):
+        covered.append(match.span())
+        try:
+            found.append(Decimal(match.group(0).replace(" ", "")))
+        except InvalidOperation:
+            continue
+
+    def inside(span):
+        return any(start <= span[0] and span[1] <= end for start, end in covered)
+
     for match in NUMBER.finditer(text or ""):
+        if inside(match.span()):
+            continue
         try:
             found.append(Decimal(match.group(0).replace(",", "")))
         except InvalidOperation:
@@ -380,16 +465,43 @@ def rate_on_page(rate, text):
     return any(number in accepted for number in numbers_on(text))
 
 
+def negative_rate_in_quote(rate, quote):
+    """True when the cited quote itself prints this rate with a minus sign."""
+    accepted = {rate, rate * Decimal(100)}
+    for match in NEGATIVE_NUMBER.finditer(quote or ""):
+        try:
+            number = Decimal(match.group(0).replace("$", "").replace(",", ""))
+        except InvalidOperation:
+            continue
+        if number in accepted:
+            return True
+    return False
+
+
+def _fold_quotes(text):
+    """Curly apostrophes and quotes compare equal to the straight characters."""
+    return (str(text)
+            .replace("\u2018", "'").replace("\u2019", "'")
+            .replace("\u201c", '"').replace("\u201d", '"'))
+
+
 def quote_on_page(quote, text):
     if not isinstance(quote, str) or not quote.strip():
         return False
-    return squash(quote) in squash(text)
+    return squash(_fold_quotes(quote)) in squash(_fold_quotes(text))
 
 
 def printed_date_on_page(value, text):
+    """The date is on the page as a contiguous phrase, or as a column header split by the other column.
+
+    Pepco prints "January" at the end of one header line and "1, 2025" on the next after the other
+    rate year's words. Up to 14 intervening words still counts; a date with no month name does not.
+    """
     month = FULL_MONTHS[value.month - 1]
-    pattern = rf"\b{month}\s+{value.day},\s+{value.year}\b"
-    return re.search(pattern, squash(text), re.I) is not None
+    flat = squash(text)
+    contiguous = rf"\b{month}\s+{value.day},?\s+{value.year}\b"
+    split = rf"\b{month}\b(?:\s+\S+){{0,14}}\s+{value.day},\s*{value.year}\b"
+    return re.search(contiguous, flat, re.I) is not None or re.search(split, flat, re.I) is not None
 
 
 def iso_date(text):
@@ -416,7 +528,17 @@ def vocabulary(conn):
     }
 
 
-def _system_prompt(vocab):
+RATE_YEAR_INSTRUCTION = (
+    " When the pages print more than one rate year for this schedule (a full set of rates that takes "
+    "effect on a printed date and replaces the previous set, for example columns headed Rate Year 1 and "
+    "Rate Year 2), also return rate_years: a list of {label, effective_from, effective_to} with the dates "
+    "exactly as printed, and tag every component with the label of its year in rate_year. Seasons and "
+    "time-of-use periods are not rate years. When only one set of rates is printed, return no rate_years "
+    "and no rate_year tags."
+)
+
+
+def _system_prompt(vocab, rate_years=False):
     def listing(values):
         return ", ".join(values) if values else "(none stored yet; use a short snake_case value)"
     return (
@@ -434,16 +556,19 @@ def _system_prompt(vocab):
         f"unit values: {listing(vocab['unit'])}. "
         "variant is generation, distribution, total, on_peak, or off_peak when the page prints that "
         "split, otherwise null. Do not invent a rate that is not printed."
+        + (RATE_YEAR_INSTRUCTION if rate_years else "")
     )
 
 
-def _user_prompt(section):
+def _user_prompt(section, rate_years=False):
     lines = [
         f"Section heading: {section['designation']}",
         f"Printed name: {section['name'] or 'not printed in the index'}",
         "JSON keys: designation, name, effective_date, disposition, "
         "components (printed_label, component_type, rate, unit, variant, source_page, source_quote), "
-        "rules (rule_type, rule_text, source_page, source_quote).",
+        "rules (rule_type, rule_text, source_page, source_quote)"
+        + (", rate_years (label, effective_from, effective_to); components may also carry rate_year." if rate_years
+           else "."),
     ]
     for page in section["pages"]:
         lines.append(f"--- page {page['n']} ---")
@@ -564,7 +689,9 @@ def _verify_component(item, pages, vocab, new_values):
         return None, {"field": "source_quote", "value": str(quote), "signal": "quote_not_found",
                       "detail": f"source quote not on page {page_number}"}
     rate = _decimal(item.get("rate"))
-    if rate is None or not rate_on_page(rate, text):
+    if rate is None or not rate_on_page(rate, text) or (
+        rate < 0 and not negative_rate_in_quote(rate, quote)
+    ):
         return None, {"field": "rate", "value": str(item.get("rate")), "signal": "rate_not_on_page",
                       "detail": f"rate {item.get('rate')!r} is not a number printed on page {page_number}"}
     unit = item.get("unit")
@@ -607,7 +734,12 @@ def _verify_rule(item, pages, vocab, new_values):
                       "detail": "rule_type and rule_text are required"}
     if rule_type not in vocab["rule_type"]:
         new_values["rule_type"].add(rule_type)
-    return (rule_type, rule_text), None
+    return {
+        "rule_type": rule_type,
+        "rule_text": rule_text,
+        "source_page": page_number,
+        "citation_status": "cited" if page_number else "uncited",
+    }, None
 
 
 def _queue(schedule_code, field, value, signal, detail, bucket="section", index=None):
@@ -628,6 +760,19 @@ def _tally(items):
     for item in items:
         counts[item["signal"]] = counts.get(item["signal"], 0) + 1
     return counts
+
+
+USAGE_FIELDS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def read_section(section, prompt, caller, rate_years=False):
+    """One live model reading of one section: (raw text, stop reason, usage used by this call)."""
+    before = dict(getattr(caller, "usage", {}) or {})
+    raw, stop = caller.complete(prompt, _user_prompt(section, rate_years))
+    after = getattr(caller, "usage", None) or {}
+    delta = {field: max(0, int(after.get(field, 0) or 0) - int(before.get(field, 0) or 0))
+             for field in USAGE_FIELDS}
+    return raw, stop, delta
 
 
 def parse_book(source, target, client=None, cache_dir=None):
@@ -703,13 +848,8 @@ def parse_book(source, target, client=None, cache_dir=None):
             for field in usage_fields:
                 usage[field] += int((cached.get("usage") or {}).get(field, 0) or 0)
         else:
-            caller = extractor()
-            before = dict(getattr(caller, "usage", {}) or {})
-            raw, stop = caller.complete(prompt, _user_prompt(section))
+            raw, stop, delta = read_section(section, prompt, extractor())
             model_calls += 1
-            after = getattr(caller, "usage", None) or {}
-            delta = {field: max(0, int(after.get(field, 0) or 0) - int(before.get(field, 0) or 0))
-                     for field in usage_fields}
             cache["sections"][cache_key] = {"raw": raw, "stop_reason": stop, "usage": delta, "model": MODEL}
             _save_cache(cache_file, cache)
             for field in usage_fields:
@@ -761,10 +901,17 @@ def parse_book(source, target, client=None, cache_dir=None):
                                           "pages": section["page_numbers"]}
                     continue
                 identity = (state, utility, code, version_number, effective)
+                schedule_kind = (
+                    "informational" if section["kind"] == "exhibit" else section["kind"]
+                )
                 found = conn.execute(
                     "SELECT id FROM tariff_versions WHERE state = ? AND utility = ? AND schedule_code = ? "
                     "AND version = ? AND effective_from = ? ORDER BY id DESC LIMIT 1", identity).fetchone()
                 if found:
+                    conn.execute(
+                        "UPDATE tariff_versions SET schedule_kind = ? WHERE id = ?",
+                        (schedule_kind, found[0]),
+                    )
                     existing.append({"schedule_code": code, "version_id": found[0],
                                      "components": len(components), "rules": len(rules)})
                     per_schedule[code] = {"verified_components": len(components), "verified_rules": len(rules),
@@ -774,8 +921,9 @@ def parse_book(source, target, client=None, cache_dir=None):
                     verified_rules += len(rules)
                     continue
                 cursor = conn.execute(
-                    "INSERT INTO tariff_versions(state, utility, schedule_code, version, effective_from, status) "
-                    "VALUES (?, ?, ?, ?, ?, 'draft')", identity)
+                    "INSERT INTO tariff_versions(state, utility, schedule_code, version, effective_from, "
+                    "status, schedule_kind) VALUES (?, ?, ?, ?, ?, 'draft', ?)",
+                    (*identity, schedule_kind))
                 version_id = cursor.lastrowid
                 seen = set()
                 stored_components = 0
@@ -795,13 +943,14 @@ def parse_book(source, target, client=None, cache_dir=None):
                     stored_components += 1
                 seen_rules = set()
                 stored_rules = 0
-                for rule_type, rule_text in rules:
-                    if (rule_type, rule_text) in seen_rules:
+                for rule in rules:
+                    rule_key = (rule["rule_type"], rule["rule_text"])
+                    if rule_key in seen_rules:
                         continue
-                    seen_rules.add((rule_type, rule_text))
+                    seen_rules.add(rule_key)
                     conn.execute(
-                        "INSERT INTO tariff_rules(tariff_version_id, rule_type, rule_text) VALUES (?, ?, ?)",
-                        (version_id, rule_type, rule_text))
+                        "INSERT INTO tariff_rules(tariff_version_id, rule_type, rule_text, source_page, citation_status) VALUES (?, ?, ?, ?, ?)",
+                        (version_id, rule["rule_type"], rule["rule_text"], rule["source_page"], rule["citation_status"]))
                     stored_rules += 1
                 created.append({"schedule_code": code, "version_id": version_id,
                                 "components": stored_components, "rules": stored_rules})

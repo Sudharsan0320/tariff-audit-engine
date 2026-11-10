@@ -19,31 +19,53 @@ except ImportError:
 if __package__:
     from .audit_bills import (
         DEFAULT_MAPPING_PATH,
+        _base_is_residential,
         _components_for_version,
+        _filter_optional_provisions,
         _fetch_bill,
+        _minimum_charge_status,
+        _rider_components_for_schedule,
+        _rider_decisions,
         _rules_for_version,
+        _structured_rules_for_versions,
         load_mapping,
     )
     from .billing_engine import (
+        DETERMINANT_COMPONENT_TYPES,
+        DETERMINANT_VARIANTS,
+        apply_structured_demand_rules,
+        _select_representations,
         _season_for_month,
         evaluate_schedule_components,
         resolve_period_version,
         round_money,
     )
+    from .repricing_reasons import candidate_reasons
 else:
     from audit_bills import (
         DEFAULT_MAPPING_PATH,
+        _base_is_residential,
         _components_for_version,
+        _filter_optional_provisions,
         _fetch_bill,
+        _minimum_charge_status,
+        _rider_components_for_schedule,
+        _rider_decisions,
         _rules_for_version,
+        _structured_rules_for_versions,
         load_mapping,
     )
     from billing_engine import (
+        DETERMINANT_COMPONENT_TYPES,
+        DETERMINANT_VARIANTS,
+        apply_structured_demand_rules,
+        _select_representations,
         _season_for_month,
         evaluate_schedule_components,
         resolve_period_version,
         round_money,
     )
+    from repricing_reasons import candidate_reasons
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,18 +75,21 @@ NO_COVERING_VERSION = "no_covering_version"
 MISSING_DETERMINANT = "missing_determinant"
 NEEDS_ELECTION_DATA = "needs_election_data"
 NEEDS_CONTRACTED_AMOUNT = "needs_contracted_amount"
+UNCLASSIFIED_SCHEDULE_KIND = "unclassified_schedule_kind"
+ELIGIBILITY_MISMATCH = "eligibility_mismatch"
 REASONS = (
     CROSS_REFERENCE_ONLY,
     NO_COVERING_VERSION,
     MISSING_DETERMINANT,
     NEEDS_ELECTION_DATA,
     NEEDS_CONTRACTED_AMOUNT,
+    UNCLASSIFIED_SCHEDULE_KIND,
+    ELIGIBILITY_MISMATCH,
 )
 
 FIXED_MONTHLY_UNITS = {"usd_per_month", "usd_per_unit_month"}
 VOLTAGE_VARIANTS = {"primary", "secondary"}
 METER_VARIANTS = {"metered", "unmetered"}
-USAGE_VARIANT_DETERMINANTS = {"on_peak": "on_peak_usage", "off_peak": "off_peak_usage"}
 CONTRACT_AMOUNT_RULES = (
     ("contract_demand", "contract demand from the customer's agreement"),
     ("payment_basis", "contracted capacity level (CL)"),
@@ -230,6 +255,48 @@ def _select_voltage_variant(components, bill):
     return {"account_voltage": bill["voltage"], "selected": voltage, "excluded": sorted(variants - {voltage})}
 
 
+def _select_voltage_category(components, bill):
+    def category_voltage(component):
+        match = re.search(
+            r"\b(primary|secondary)\b",
+            str(component.get("billing_category") or ""),
+            re.IGNORECASE,
+        )
+        return match.group(1).casefold() if match else None
+
+    available = {
+        category_voltage(component)
+        for component in components
+        if category_voltage(component) is not None
+    }
+    if not available:
+        return None, components
+    voltage = str(bill.get("voltage") or "").strip().casefold()
+    if voltage not in VOLTAGE_VARIANTS:
+        raise _Blocked(
+            MISSING_DETERMINANT,
+            "service voltage class matching the primary/secondary billing categories",
+        )
+    if voltage not in available:
+        raise _Blocked(
+            ELIGIBILITY_MISMATCH,
+            f"stored rate categories do not include the account's {voltage} voltage class",
+        )
+    selected = [
+        component
+        for component in components
+        if category_voltage(component) is None or category_voltage(component) == voltage
+    ]
+    return (
+        {
+            "account_voltage": bill["voltage"],
+            "selected": voltage,
+            "excluded": sorted(available - {voltage}),
+        },
+        selected,
+    )
+
+
 def _requirements(component):
     unit = component["unit"]
     variant = component["variant"]
@@ -238,9 +305,11 @@ def _requirements(component):
     if unit == "usd_per_kwh":
         names = ["demand"] if component.get("tier_unit") == "kwh_per_kw" else []
         names.append(
-            "total_consumption"
-            if variant is None
-            else USAGE_VARIANT_DETERMINANTS.get(variant, f"usage[{variant}]")
+            component.get("determinant_type")
+            or DETERMINANT_VARIANTS.get(variant)
+            or DETERMINANT_COMPONENT_TYPES.get(
+                component.get("component_type"), "total_consumption"
+            )
         )
         return names
     if unit == "usd_per_kw":
@@ -256,6 +325,41 @@ def _requirements(component):
     if unit in FIXED_MONTHLY_UNITS or unit in {"percent", "multiplier"}:
         return []
     raise RepricingError(f"Unknown unit {unit!r} on component {component['id']}.")
+
+
+def _set_category_determinants(components):
+    for component in components:
+        if component["unit"] != "usd_per_kwh" or component.get("determinant_type"):
+            continue
+        category = str(component.get("billing_category") or "")
+        if re.search(r"\bcritical[-\s]+on[-\s]?peak\b", category, re.IGNORECASE):
+            component["determinant_type"] = "critical_on_peak_usage"
+        elif re.search(r"\bon[-\s]peak\b", category, re.IGNORECASE):
+            component["determinant_type"] = "on_peak_usage"
+        elif re.search(r"\boff[-\s]peak\b", category, re.IGNORECASE):
+            component["determinant_type"] = "off_peak_usage"
+    return components
+
+
+def _check_alternative_tod_provision(components, rules):
+    rule_text = " ".join(rule["rule_text"] for rule in rules).casefold()
+    if "time-of-day provision" not in rule_text:
+        return
+    has_tod_energy = any(
+        component["unit"] == "usd_per_kwh"
+        and re.search(r"\b(?:tod|time[-\s]of[-\s]day)\b", str(component.get("billing_category") or ""), re.IGNORECASE)
+        for component in components
+    )
+    has_standard_energy = any(
+        component["unit"] == "usd_per_kwh"
+        and not re.search(r"\b(?:tod|time[-\s]of[-\s]day|unmetered)\b", str(component.get("billing_category") or ""), re.IGNORECASE)
+        for component in components
+    )
+    if has_tod_energy and has_standard_energy:
+        raise _Blocked(
+            NEEDS_ELECTION_DATA,
+            "selection of the stored load-management time-of-day provision",
+        )
 
 
 def _check_determinants(components, determinants):
@@ -327,43 +431,80 @@ def _version_for(conn, code, bill, identity, pins):
     return dict(zip([column[0] for column in cursor.description], row))
 
 
-def _base_schedules(conn, identity):
+def _identity_for_bill(conn, bill, preferred):
+    rows = conn.execute(
+        """
+        SELECT DISTINCT state, utility
+        FROM tariff_versions
+        WHERE schedule_code = ? AND status IN ('active', 'superseded')
+          AND effective_from <= ?
+          AND (effective_to IS NULL OR effective_to > ?)
+        """,
+        (bill["schedule_code"], bill["bill_from"], bill["bill_to"]),
+    ).fetchall()
+    identities = {(row[0], row[1]) for row in rows}
+    preferred_identity = (preferred["state"], preferred["utility"])
+    if preferred_identity in identities or not identities:
+        return preferred
+    if len(identities) == 1:
+        state, utility = next(iter(identities))
+        return {"state": state, "utility": utility}
+    raise RepricingError(
+        f"Bill {bill['id']} schedule {bill['schedule_code']!r} maps to multiple "
+        "utilities for its effective period."
+    )
+
+
+def _base_schedules(conn, identity, bill):
     cursor = conn.execute(
         """
         SELECT v.schedule_code, MIN(v.id) AS first_id
         FROM tariff_versions v
-        WHERE v.state = ? AND v.utility = ? AND v.status IN ('active', 'superseded')
-          AND NOT EXISTS (
-              SELECT 1 FROM tariff_versions v2
-              JOIN tariff_components c ON c.tariff_version_id = v2.id
-              WHERE v2.schedule_code = v.schedule_code
-                AND v2.state = v.state AND v2.utility = v.utility
-                AND c.billing_category IS NOT NULL
-          )
+        WHERE v.state = ? AND v.utility = ? AND v.status = 'active'
+          AND v.schedule_kind = 'schedule'
+          AND v.effective_from <= ?
+          AND (v.effective_to IS NULL OR v.effective_to > ?)
         GROUP BY v.schedule_code
         ORDER BY first_id
         """,
-        (identity["state"], identity["utility"]),
+        (
+            identity["state"],
+            identity["utility"],
+            bill["bill_from"],
+            bill["bill_to"],
+        ),
     )
     return [row[0] for row in cursor.fetchall()]
 
 
-def _billed_rider_codes(conn, bill, identity):
+def _schedule_inventory(conn, identity, bill):
     cursor = conn.execute(
         """
-        SELECT DISTINCT v.schedule_code
-        FROM tariff_versions v JOIN tariff_components c ON c.tariff_version_id = v.id
+        SELECT DISTINCT schedule_code, schedule_kind
+        FROM tariff_versions v
         WHERE v.state = ? AND v.utility = ? AND v.status = 'active'
-          AND c.billing_category = ?
-        ORDER BY v.schedule_code
+          AND v.effective_from <= ?
+          AND (v.effective_to IS NULL OR v.effective_to > ?)
+        ORDER BY schedule_code
         """,
-        (identity["state"], identity["utility"], bill["schedule_code"]),
+        (identity["state"], identity["utility"], bill["bill_from"], bill["bill_to"]),
     )
-    return [row[0] for row in cursor.fetchall()]
+    return [
+        {
+            "schedule_code": row[0],
+            "schedule_kind": row[1],
+            "reason": (
+                "No stored printed/producing-path schedule kind; not priced."
+                if row[1] is None
+                else None
+            ),
+        }
+        for row in cursor.fetchall()
+    ]
 
 
-def _blocked_candidate(code, version, error, selection):
-    return {
+def _blocked_candidate(code, version, error, selection, details=None):
+    candidate = {
         "schedule_code": code,
         "status": "blocked",
         "reason": error.reason,
@@ -371,6 +512,9 @@ def _blocked_candidate(code, version, error, selection):
         "version": version,
         "selection": selection,
     }
+    if details:
+        candidate.update(details)
+    return candidate
 
 
 def _version_summary(version):
@@ -388,7 +532,70 @@ def _engine(call, what):
         raise RepricingError(f"Engine failed unexpectedly on {what}: {error}") from error
 
 
-def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None):
+def _eligibility_assessment(bill, rules):
+    eligibility_rules = [rule["rule_text"] for rule in rules if rule["rule_type"] == "eligibility"]
+    if not eligibility_rules:
+        return {
+            "status": "not_established",
+            "reason": "No stored eligibility rule establishes customer-class applicability.",
+        }
+    text = " ".join(eligibility_rules).casefold()
+    customer_class = str(bill.get("customer_class") or "").casefold()
+    if "residential" in text and "commercial" in customer_class:
+        raise _Blocked(ELIGIBILITY_MISMATCH, "stored eligibility is residential; the bill account is commercial")
+    if "commercial" in text and "residential" in customer_class:
+        raise _Blocked(ELIGIBILITY_MISMATCH, "stored eligibility is commercial; the bill account is residential")
+    if "ami meter" in text or "charging station" in text:
+        return {
+            "status": "not_established",
+            "reason": "Stored eligibility requires AMI-meter or vehicle-charging evidence that the account record does not contain.",
+        }
+    if "employee" in text:
+        return {
+            "status": "not_established",
+            "reason": "Stored eligibility is limited to company employees; the account record does not establish employee status.",
+        }
+    if "residential" in customer_class and "residential" in text:
+        return {"status": "established", "reason": "Stored eligibility includes residential service."}
+    if any(term in customer_class for term in ("commercial", "industrial")) and any(
+        term in text for term in ("commercial", "industrial")
+    ):
+        return {"status": "established", "reason": "Stored eligibility includes this customer class."}
+    return {
+        "status": "not_established",
+        "reason": "Stored eligibility text does not establish this account's customer class.",
+    }
+
+
+def _structured_demand_inputs(components, rules, determinants):
+    for rule in rules:
+        if rule["rule_type"] != "demand_determination":
+            continue
+        import json
+
+        parameters = json.loads(rule["parameters_json"])
+        if parameters.get("evaluator") != "sbs_demand_v1":
+            continue
+        generation = parameters["generation_demand"]
+        contract = parameters["contract_capacity_demand"]
+        if any(
+            c.get("component_type") == generation["component_type"]
+            and c.get("variant") == generation["variant"]
+            for c in components
+        ):
+            for name in (generation["measured_field"], generation["reservation_field"]):
+                if name not in determinants:
+                    raise _Blocked(MISSING_DETERMINANT, name)
+        if any(
+            c.get("component_type") in contract["component_types"]
+            and c.get("variant") == contract["variant"]
+            for c in components
+        ) and contract["capacity_field"] not in determinants:
+            raise _Blocked(MISSING_DETERMINANT, contract["capacity_field"])
+
+
+def _price_candidate(conn, bill, history, identity, code, mapping, pins=None):
+    bill = {**bill, "determinants": dict(bill["determinants"])}
     selection = {}
     version = None
     base_version = _version_for(conn, code, bill, identity, pins)
@@ -403,38 +610,123 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None
             selection,
         )
     version = _version_summary(base_version)
+    rider_applicability = []
     try:
-        components = _components_for_version(conn, base_version["id"])
         rules = _rules_for_version(conn, base_version["id"])
-        if not components:
-            raise _Blocked(CROSS_REFERENCE_ONLY, "the version stores rules only, no priced components")
-
+        components = _filter_optional_provisions(
+            _components_for_version(conn, base_version["id"]), rules, mapping
+        )
+        structured_rules = _structured_rules_for_versions(conn, [base_version["id"]])
+        structured_minimum_rules = [
+            rule for rule in structured_rules if rule["rule_type"] == "minimum_charge"
+        ]
+        selection["minimum_charge"] = {
+            "status": "not_evaluated",
+            "reason": "The candidate did not reach minimum-charge evaluation.",
+            **(
+                {"source_page": structured_minimum_rules[0]["source_page"]}
+                if structured_minimum_rules
+                else {}
+            ),
+        }
+        selection["structured_demand_rules"] = [
+            {
+                "rule_type": rule["rule_type"],
+                "source_page": rule["source_page"],
+                "status": "not_evaluated",
+            }
+            for rule in structured_rules
+            if rule["rule_type"] == "demand_determination"
+        ]
         riders = []
         riders_excluded = []
-        for rider_code in rider_codes:
-            rider_version = _version_for(conn, rider_code, bill, identity, pins)
-            if rider_version is None:
-                raise _Blocked(
-                    NO_COVERING_VERSION,
-                    f"no active version of {rider_code} covers {bill['bill_from']} through {bill['bill_to']}",
+        included_riders, rider_applicability = _rider_decisions(
+            conn, bill, base_version, mapping
+        )
+        billed_included_riders = included_riders
+        billed_rider_applicability = rider_applicability
+        if bill["schedule_code"] != code:
+            billed_base_version = _version_for(
+                conn, bill["schedule_code"], bill, identity, pins
+            )
+            if billed_base_version is None:
+                billed_included_riders = []
+                billed_rider_applicability = []
+            else:
+                billed_included_riders, billed_rider_applicability = _rider_decisions(
+                    conn, bill, billed_base_version, mapping
                 )
-            rows = [
-                row
-                for row in _components_for_version(conn, rider_version["id"])
-                if row["billing_category"] == code
+        billed_rider_codes = {
+            rider["schedule_code"] for rider, _, _ in billed_included_riders
+        }
+        if not components:
+            raise _Blocked(CROSS_REFERENCE_ONLY, "the version stores rules only, no priced components")
+        eligibility = _eligibility_assessment(bill, rules)
+        selection["eligibility"] = eligibility
+        if pins:
+            included_riders = [
+                (
+                    _version_for(conn, rider["schedule_code"], bill, identity, pins),
+                    _components_for_version(
+                        conn,
+                        pins[rider["schedule_code"]],
+                    ),
+                    _rules_for_version(
+                        conn,
+                        pins[rider["schedule_code"]],
+                    ),
+                )
+                if rider["schedule_code"] in pins
+                else (rider, rider_components, rider_rules)
+                for rider, rider_components, rider_rules in included_riders
             ]
-            rider_rules = _rules_for_version(conn, rider_version["id"])
-            if any(rule["rule_type"] == "contribution_options" for rule in rider_rules):
-                riders_excluded.append(
-                    {"rider": rider_code, "reason": "optional contribution; no customer election is stored"}
-                )
+        base_is_residential = _base_is_residential(conn, base_version)
+        for rider_version, rider_components, rider_rules in included_riders:
+            rider_code = rider_version["schedule_code"]
+            if rider_code not in billed_rider_codes:
                 continue
+            if any(rule["rule_type"] == "contribution_options" for rule in rider_rules):
+                continue
+            rows = _rider_components_for_schedule(
+                rider_components,
+                code,
+                base_is_residential,
+                rider_rules,
+                mapping,
+            )
             if not rows:
-                riders_excluded.append(
-                    {"rider": rider_code, "reason": f"no rate row for schedule {code}"}
-                )
                 continue
             riders.append({"code": rider_code, "version": rider_version, "rows": rows})
+        for decision in billed_rider_applicability:
+            rider_code = decision["schedule_code"]
+            rider_version = _version_for(conn, rider_code, bill, identity, pins)
+            if rider_version is None:
+                continue
+            rider_rules = _rules_for_version(conn, rider_version["id"])
+            if any(rule["rule_type"] == "contribution_options" for rule in rider_rules) and any(
+                row["billing_category"] == bill["schedule_code"]
+                for row in _components_for_version(conn, rider_version["id"])
+            ):
+                riders_excluded.append({
+                    "rider": rider_code,
+                    "reason": "optional contribution; no customer election is stored",
+                })
+        _check_alternative_tod_provision(components, rules)
+        structured_demand_rules = [
+            rule for rule in structured_rules if rule["rule_type"] == "demand_determination"
+        ]
+        if structured_demand_rules:
+            _structured_demand_inputs(components, structured_demand_rules, bill["determinants"])
+            try:
+                bill["determinants"] = apply_structured_demand_rules(
+                    components, bill["determinants"], bill["bill_to"], structured_demand_rules
+                )
+            except ValueError as error:
+                raise RepricingError(f"Structured demand rule for {code} failed: {error}") from error
+            selection["structured_demand_rules"] = [
+                {"rule_type": r["rule_type"], "source_page": r["source_page"], "status": "evaluated"}
+                for r in structured_demand_rules
+            ]
 
         billing_class, class_record = _select_class(components, rules, bill, history)
         if class_record:
@@ -459,9 +751,40 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None
                 c for c in components if c["variant"] not in voltage_record["excluded"]
             ]
 
+        components = _select_representations(components)
+        components = _set_category_determinants(components)
         _check_contracted_capacity_basis(components, rules)
         rider_rows = [row for rider in riders for row in rider["rows"]]
+        rider_rows = _set_category_determinants(rider_rows)
         _check_determinants(components + rider_rows, bill["determinants"])
+        voltage_category_record, components = _select_voltage_category(
+            components, bill
+        )
+        rider_voltage_record, rider_rows = _select_voltage_category(
+            rider_rows, bill
+        )
+        if voltage_category_record or rider_voltage_record:
+            records = [
+                record
+                for record in (voltage_category_record, rider_voltage_record)
+                if record is not None
+            ]
+            selection["voltage_category"] = {
+                "account_voltage": bill["voltage"],
+                "selected": records[0]["selected"],
+                "excluded": sorted(
+                    {
+                        voltage
+                        for record in records
+                        for voltage in record["excluded"]
+                    }
+                ),
+            }
+        selected_rider_rows = {id(row) for row in rider_rows}
+        for rider in riders:
+            rider["rows"] = [
+                row for row in rider["rows"] if id(row) in selected_rider_rows
+            ]
         if any(c["season"] is not None for c in components):
             try:
                 _season_for_month(conn, base_version["id"], bill["bill_to"])
@@ -472,7 +795,10 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None
                 ) from error
         _check_contract_and_election(components, rules)
     except _Blocked as blocked:
-        return _blocked_candidate(code, version, blocked, selection)
+        return _blocked_candidate(
+            code, version, blocked, selection,
+            {"rider_applicability": rider_applicability},
+        )
 
     if meter_record and excluded_components:
         if all(c["unit"] in FIXED_MONTHLY_UNITS for c in excluded_components):
@@ -494,6 +820,26 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None
         ),
         f"schedule {code}",
     )
+    schedule_subtotal = sum((line["amount"] for line in schedule_lines), Decimal(0))
+    minimum_status = _minimum_charge_status(
+        rules,
+        structured_minimum_rules[0] if structured_minimum_rules else None,
+        schedule_subtotal if structured_minimum_rules else None,
+    )
+    if minimum_status["status"] == "evaluated":
+        floor_total = Decimal(minimum_status["post_floor_subtotal"])
+        if minimum_status["bound"]:
+            schedule_lines.append({
+                "component_type": "minimum_charge_adjustment",
+                "amount": floor_total - round_money(schedule_subtotal),
+                "source_page": minimum_status["source_page"],
+            })
+        schedule_subtotal = floor_total
+    selection["minimum_charge"] = minimum_status
+    notes = []
+    minimum_text = _fixed_text(rules, "minimum_charge")
+    if minimum_text and minimum_status["status"] != "evaluated":
+        notes.append(f"minimum charge not evaluated: {minimum_text}")
     rider_lines = []
     for rider in riders:
         lines = _engine(
@@ -504,12 +850,7 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None
             f"rider {rider['code']} for schedule {code}",
         )
         rider_lines.extend({"rider": rider["code"], **line} for line in lines)
-    schedule_subtotal = sum((line["amount"] for line in schedule_lines), Decimal(0))
     rider_subtotal = sum((line["amount"] for line in rider_lines), Decimal(0))
-    notes = []
-    minimum = _fixed_text(rules, "minimum_charge")
-    if minimum:
-        notes.append(f"minimum charge not evaluated: {minimum}")
     return {
         "schedule_code": code,
         "status": "computed",
@@ -527,23 +868,66 @@ def _price_candidate(conn, bill, history, identity, code, rider_codes, pins=None
             for r in riders
         ],
         "riders_excluded": riders_excluded,
+        "rider_applicability": rider_applicability,
         "notes": notes,
     }
 
 
 def price_schedule(conn, bill, history, identity, code, pins=None):
-    """One candidate for one schedule; `pins` maps a schedule or rider code to a version id."""
+    """One candidate for one schedule; `pins` maps a schedule or rider code to a version id.
+
+    A computed candidate carries the same difference and reasons `reprice` attaches,
+    measured against the bill's own schedule priced without pins.
+    """
     if not bill.get("schedule_code"):
         raise RepricingError(f"Bill {bill.get('id')} has no stored schedule code.")
-    rider_codes = _billed_rider_codes(conn, bill, identity)
-    return _price_candidate(conn, bill, history, identity, code, rider_codes, pins)
+    mapping = load_mapping(DEFAULT_MAPPING_PATH)[0]
+    candidate = _price_candidate(conn, bill, history, identity, code, mapping, pins)
+    if candidate.get("status") != "computed":
+        return candidate
+    if code == bill["schedule_code"]:
+        priced = [candidate]
+    else:
+        own = _price_candidate(conn, bill, history, identity, bill["schedule_code"], mapping)
+        priced = [own, candidate]
+    _attach_reasons(bill, priced)
+    return candidate
 
 
-def reprice(conn, bill, history, identity):
+def _attach_reasons(bill, candidates):
+    """Difference and reasons against the bill's own computed schedule.
+
+    Blocked candidates keep their status and named reason and receive neither
+    a difference nor a reason. A computed candidate whose own schedule is not
+    computed gets no invented comparison.
+    """
+    own = next((c for c in candidates if c["schedule_code"] == bill["schedule_code"]), None)
+    own_ready = own is not None and own.get("status") == "computed"
+    for candidate in candidates:
+        if candidate.get("status") != "computed":
+            continue
+        if not own_ready:
+            candidate["difference"] = None
+            candidate["reasons"] = []
+            continue
+        candidate["difference"] = _amount_difference(candidate["total"], own["total"])
+        candidate["reasons"] = candidate_reasons(own, candidate)
+    return candidates
+
+
+def _amount_difference(candidate_total, own_total):
+    return Decimal(str(candidate_total)) - Decimal(str(own_total))
+
+
+def reprice(conn, bill, history, identity, mapping=None):
     """One candidate per base schedule for an already-loaded bill."""
     if not bill.get("schedule_code"):
         raise RepricingError(f"Bill {bill.get('id')} has no stored schedule code.")
-    rider_codes = _billed_rider_codes(conn, bill, identity)
+    mapping = mapping or load_mapping(DEFAULT_MAPPING_PATH)[0]
+    candidates = [
+        _price_candidate(conn, bill, history, identity, code, mapping)
+        for code in _base_schedules(conn, identity, bill)
+    ]
     return {
         "bill_id": bill["id"],
         "account_number": bill["account_number"],
@@ -551,19 +935,17 @@ def reprice(conn, bill, history, identity):
         "bill_from": str(bill["bill_from"]),
         "bill_to": str(bill["bill_to"]),
         "determinants": dict(bill["determinants"]),
-        "candidates": [
-            _price_candidate(conn, bill, history, identity, code, rider_codes)
-            for code in _base_schedules(conn, identity)
-        ],
+        "candidates": _attach_reasons(bill, candidates),
+        "schedule_inventory": _schedule_inventory(conn, identity, bill),
     }
 
 
 def reprice_bill(conn, bill_id, mapping_path=DEFAULT_MAPPING_PATH):
     """Read-only: reprice a stored bill under every base schedule."""
     mapping, _ = load_mapping(mapping_path)
-    identity = mapping["tariff_identity"]
     bill = _fetch_bill(conn, bill_id)
-    return reprice(conn, bill, _history(conn, bill), identity)
+    identity = _identity_for_bill(conn, bill, mapping["tariff_identity"])
+    return reprice(conn, bill, _history(conn, bill), identity, mapping)
 
 
 class ReviewRefused(ValueError):
@@ -597,7 +979,8 @@ def record_decision(conn, bill_id, schedule_code, decision, reviewer, note=None)
         raise ReviewRefused("A reviewer is required.")
     _require_bill(conn, bill_id)
     identity = load_mapping(DEFAULT_MAPPING_PATH)[0]["tariff_identity"]
-    if schedule_code not in _base_schedules(conn, identity):
+    bill = _fetch_bill(conn, bill_id)
+    if schedule_code not in _base_schedules(conn, identity, bill):
         raise ReviewRefused(f"{schedule_code!r} is not a base schedule.")
     existing = _decision_rows(conn, bill_id).get(schedule_code)
     reviewer = str(reviewer).strip()
@@ -680,6 +1063,14 @@ def format_table(result):
             notes.append(
                 f"{meter['selected']} variant; excluded {', '.join(meter['excluded'])}"
                 f" ${meter.get('excluded_amount')}"
+            )
+        if selection.get("eligibility", {}).get("status") == "not_established":
+            notes.append("eligibility not established")
+        minimum = selection.get("minimum_charge", {})
+        if minimum.get("status") == "evaluated":
+            notes.append(
+                f"minimum ${minimum['floor']}; "
+                f"{'binding' if minimum['bound'] else 'not binding'}"
             )
         if candidate["status"] == "computed":
             rows.append(

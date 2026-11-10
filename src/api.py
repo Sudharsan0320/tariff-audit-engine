@@ -123,12 +123,16 @@ def save_upload(upload: UploadFile):
     return path, sha256, size, already
 
 
-def refuse_wrong_kind(detection, expected, endpoint):
+def refuse_wrong_kind(path, filename, detection, expected, endpoint):
+    plain = document_intake.plain_words(detection, f"refused_{detection['doc_kind']}")
+    if not Path(path).with_suffix(".intake.json").exists():
+        document_intake.record_intake(path, filename, detection, "refused", plain)
     refuse(
         422,
         f"This document was identified as a {detection['doc_kind']}, not a {expected}; it was not parsed.",
         [f"Send it to {endpoint} instead."],
         detection=detection,
+        plain=plain,
     )
 
 
@@ -479,7 +483,7 @@ def upload_bill(file: UploadFile = File(...)):
     path, _, _, _ = save_upload(file)
     detection = document_intake.identify_document(path)
     if detection["doc_kind"] == document_intake.TARIFF:
-        refuse_wrong_kind(detection, "bill", "POST /uploads/tariff")
+        refuse_wrong_kind(path, file.filename, detection, "bill", "POST /uploads/tariff")
     try:
         with db.connect(target()) as conn:
             draft, status, validation, _ = ingest_usage_pdf(conn, path)
@@ -492,12 +496,16 @@ def upload_bill(file: UploadFile = File(...)):
             validation["failures"],
             warnings=validation["warnings"],
         )
+    plain = document_intake.plain_words(detection, "bill_loaded")
+    document_intake.record_intake(path, file.filename, detection, status, plain)
     return {
         "status": status,
         "account_number": draft.get("account", {}).get("account_number"),
         "bills_in_file": len(draft.get("bills", [])),
         "warnings": validation["warnings"],
         "information": validation.get("information", []),
+        "detection": detection,
+        "plain": plain,
     }
 
 
@@ -512,7 +520,7 @@ def upload_tariff(
     path, sha256, size, already = save_upload(file)
     detection = document_intake.identify_document(path)
     if detection["doc_kind"] == document_intake.BILL:
-        refuse_wrong_kind(detection, "tariff", "POST /uploads/bill")
+        refuse_wrong_kind(path, file.filename, detection, "tariff", "POST /uploads/bill")
     intake = {"sha256": sha256, "size": size, "stored_as": path.name, "duplicate_upload": already}
     try:
         routing = document_intake.route_tariff(
@@ -523,30 +531,27 @@ def upload_tariff(
     except document_intake.IntakeError as error:
         refuse(422, "The tariff upload was refused.", [str(error)], detection=detection)
     status = routing["status"]
-    document_intake.record_intake(path, file.filename, detection, status)
+
+    def answer(plain_status, body):
+        plain = document_intake.plain_words(detection, plain_status, kind=kind, result=routing)
+        document_intake.record_intake(path, file.filename, detection, status, plain)
+        return {**body, "detection": detection, "intake": intake, "plain": plain}
+
     if status == document_intake.INGESTED:
-        return {**routing, "detection": detection, "intake": intake}
+        return answer(status, routing)
     if status != document_intake.PARSED:
-        return {
-            "status": status,
-            "message": routing["message"],
-            "versions_created": 0,
-            "detection": detection,
-            "intake": intake,
-        }
+        return answer(status, {"status": status, "message": routing["message"], "versions_created": 0})
     version_id, count = routing["version_id"], routing["components"]
     with db.connect(target(), readonly=True) as conn:
         version = conn.execute(
             "SELECT status FROM tariff_versions WHERE id = ?", (version_id,)
         ).fetchone()
     if version and version[0] != "draft":
-        return {
+        return answer("unchanged", {
             "version_id": version_id,
             "status": version[0],
             "note": "already active; nothing changed",
-            "detection": detection,
-            "intake": intake,
-        }
+        })
     with db.connect(target(), readonly=True) as conn:
         failures = validate_drafts(conn, version_id)
     if failures:
@@ -556,14 +561,17 @@ def upload_tariff(
             failures,
             version_id=version_id,
         )
-    return {
+    return answer("draft", {
         "version_id": version_id,
         "status": "draft",
         "components": count,
         "validated": True,
-        "detection": detection,
-        "intake": intake,
-    }
+    })
+
+
+@app.get("/uploads")
+def list_uploads():
+    return document_intake.list_intakes(UPLOAD_DIR)
 
 
 @app.get("/", include_in_schema=False)

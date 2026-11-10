@@ -152,17 +152,6 @@ def validate_drafts(conn, version_id=None):
                     failures.append(
                         f"Component {component_id} has an invalid rate: {rate!r}."
                     )
-                elif rate < 0 and not (
-                    isinstance(component_type, str)
-                    and any(
-                        token in component_type.lower()
-                        for token in NON_ORDINARY_TOKENS
-                    )
-                ):
-                    failures.append(
-                        f"Component {component_id} has a non-positive rate: "
-                        f"{rate!r}."
-                    )
 
             if unit not in VALID_UNITS:
                 failures.append(

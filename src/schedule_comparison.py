@@ -145,6 +145,19 @@ def render_comparison(bill, charges, candidate, labels, mapping_version, decisio
         f"| Schedule {candidate['schedule_code']} computed total | ${_money(totals['candidate_total'])} |",
         f"| Difference (computed − billed like-for-like) | ${_signed(totals['difference'])} |",
         "",
+        "## Why the totals differ",
+        "",
+    ]
+    reasons = [reason for reason in (candidate.get("reasons") or []) if reason.get("kind") == "part"]
+    if reasons:
+        for reason in reasons:
+            out.append(f"- {reason['text']}")
+    elif candidate.get("difference") == 0:
+        out.append("- No difference from the bill's own schedule.")
+    else:
+        out.append("- No part reasons are attached.")
+    out += [
+        "",
         "## As billed",
         "",
         "| Line | Amount | Scope |",

@@ -1,8 +1,9 @@
 """Decimal-only tariff evaluation and effective-version resolution."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from itertools import groupby
+import json
 import re
 
 
@@ -11,6 +12,10 @@ ROUNDING = ROUND_HALF_UP
 DETERMINANT_VARIANTS = {
     "on_peak": "on_peak_usage",
     "off_peak": "off_peak_usage",
+}
+DETERMINANT_COMPONENT_TYPES = {
+    "on_peak_energy_charge": "on_peak_usage",
+    "off_peak_energy_charge": "off_peak_usage",
 }
 
 
@@ -28,6 +33,176 @@ def as_decimal(value):
 
 def round_money(value):
     return as_decimal(value).quantize(CENT, rounding=ROUNDING)
+
+
+def _structured_rule_parameters(rule):
+    if rule.get("citation_status") != "cited" or rule.get("source_page") is None:
+        raise ValueError("Structured tariff rule must have a page citation.")
+    parameters = rule.get("parameters")
+    if parameters is None and rule.get("parameters_json") is not None:
+        parameters = json.loads(rule["parameters_json"])
+    if not isinstance(parameters, dict):
+        raise ValueError("Structured tariff rule parameters must be an object.")
+    return parameters
+
+
+def _holiday_date(year, holiday):
+    month = holiday.get("month")
+    if holiday.get("day") is not None:
+        return date(year, month, holiday["day"])
+    weekday = holiday.get("weekday")
+    occurrence = holiday.get("occurrence")
+    if not isinstance(weekday, int) or weekday not in range(7):
+        raise ValueError("Recurring holiday weekday must be between 0 and 6.")
+    if occurrence == -1:
+        last_day = (
+            date(year + 1, month, 1) - date.resolution
+            if month == 12
+            else date(year, month + 1, 1) - date.resolution
+        )
+        return last_day - timedelta(days=(last_day.weekday() - weekday) % 7)
+    if not isinstance(occurrence, int) or occurrence not in range(1, 6):
+        raise ValueError("Recurring holiday occurrence must be -1 or between 1 and 5.")
+    first_day = date(year, month, 1)
+    first_occurrence = first_day + timedelta(
+        days=(weekday - first_day.weekday()) % 7
+    )
+    holiday_date = first_occurrence + timedelta(weeks=occurrence - 1)
+    if holiday_date.month != month:
+        raise ValueError("Recurring holiday occurrence falls outside its month.")
+    return holiday_date
+
+
+def classify_tariff_period(timestamp, structured_rules):
+    """Classify a local timestamp using cited on-peak/off-peak period rules."""
+    if isinstance(timestamp, str):
+        try:
+            timestamp = datetime.fromisoformat(timestamp)
+        except ValueError:
+            raise ValueError(f"Invalid tariff timestamp: {timestamp!r}.") from None
+    if not isinstance(timestamp, datetime):
+        raise ValueError("Tariff timestamp must be a datetime or ISO datetime string.")
+    if timestamp.tzinfo is not None:
+        raise ValueError("Tariff period timestamps must be local and timezone-naive.")
+
+    periods = {}
+    for rule in structured_rules:
+        if rule.get("rule_type") not in {"on_peak_hours", "off_peak_hours"}:
+            continue
+        parameters = _structured_rule_parameters(rule)
+        period_name = parameters.get("period")
+        if period_name not in {"on_peak", "off_peak"} or period_name in periods:
+            raise ValueError("Structured periods must define one on-peak and off-peak rule.")
+        periods[period_name] = parameters
+    if set(periods) != {"on_peak", "off_peak"}:
+        raise ValueError("Both structured on-peak and off-peak rules are required.")
+
+    on_peak = periods["on_peak"]
+    off_peak = periods["off_peak"]
+    if (
+        on_peak.get("timezone") != "local"
+        or off_peak.get("timezone") != "local"
+        or off_peak.get("weekday_behavior") != "complement_of_on_peak"
+        or on_peak.get("weekdays") != [0, 1, 2, 3, 4]
+    ):
+        raise ValueError("Unsupported structured time-of-use period definition.")
+    start = time.fromisoformat(on_peak["start_local"])
+    end = time.fromisoformat(on_peak["end_local"])
+    if start >= end:
+        raise ValueError("On-peak interval must start before it ends.")
+
+    holidays = {
+        _holiday_date(timestamp.year, holiday)
+        for holiday in off_peak.get("holidays", [])
+    }
+    is_weekday = timestamp.weekday() in on_peak["weekdays"]
+    is_on_peak = (
+        is_weekday and timestamp.date() not in holidays
+        and start <= timestamp.time() < end
+    )
+    return "on_peak" if is_on_peak else "off_peak"
+
+
+# Schema of each demand evaluator: the bill-determinant keys its path looks up.
+# sbs_demand_v1 reads determinants[generation["measured_field"]],
+# determinants[generation["reservation_field"]], and
+# determinants[contract["capacity_field"]] (and schedule_review._structured_demand_inputs
+# requires those same keys on the bill). A stored rule has to use these names.
+EVALUATOR_FIELDS = {
+    "sbs_demand_v1": {
+        "measured_field": "highest_on_peak_demand_kw",
+        "reservation_field": "supplemental_capacity_reservation_kw",
+        "capacity_field": "standby_contract_capacity_kw",
+    },
+}
+
+
+def apply_structured_demand_rules(components, determinants, bill_to, rules):
+    """Derive component-specific kW determinants from supported cited rules."""
+    resolved = dict(determinants)
+    component_demands = dict(determinants.get("demand_by_component_type", {}))
+    matching_rules = [
+        rule
+        for rule in rules
+        if rule.get("rule_type") == "demand_determination"
+    ]
+    evaluators = []
+    for rule in matching_rules:
+        parameters = _structured_rule_parameters(rule)
+        if parameters.get("evaluator") == "sbs_demand_v1":
+            evaluators.append((rule, parameters))
+    if len(evaluators) > 1:
+        raise ValueError("Multiple structured SBS demand evaluators apply.")
+    if not evaluators:
+        return resolved
+
+    _, parameters = evaluators[0]
+    date_value = _iso_date(bill_to)
+    generation = parameters["generation_demand"]
+    contract = parameters["contract_capacity_demand"]
+    generation_components = [
+        component for component in components
+        if component.get("component_type") == generation["component_type"]
+        and component.get("variant") == generation["variant"]
+        and component.get("unit") == "usd_per_kw"
+    ]
+    contract_components = [
+        component for component in components
+        if component.get("component_type") in contract["component_types"]
+        and component.get("variant") == contract["variant"]
+        and component.get("unit") == "usd_per_kw"
+    ]
+    required_generation = bool(generation_components)
+    required_contract = bool(contract_components)
+    if required_generation:
+        if date_value.month not in generation["months"]:
+            raise ValueError(
+                f"Structured SBS generation demand does not cover month "
+                f"{date_value.month}."
+            )
+        measured = as_decimal(determinants.get(generation["measured_field"]))
+        reservation = as_decimal(determinants.get(generation["reservation_field"]))
+        if measured < 0 or reservation < 0:
+            raise ValueError("SBS demand inputs cannot be negative.")
+        component_demands[generation["component_type"]] = max(
+            measured - reservation, Decimal(0)
+        )
+    if required_contract:
+        capacity = as_decimal(determinants.get(contract["capacity_field"]))
+        if capacity < 0:
+            raise ValueError("SBS contract capacity cannot be negative.")
+        for component_type in contract["component_types"]:
+            if any(
+                component.get("component_type") == component_type
+                and component.get("variant") == contract["variant"]
+                and component.get("unit") == "usd_per_kw"
+                for component in contract_components
+            ):
+                component_demands[component_type] = capacity
+
+    if component_demands:
+        resolved["demand_by_component_type"] = component_demands
+    return resolved
 
 
 def _iso_date(value):
@@ -101,7 +276,13 @@ def resolve_period_version(conn, schedule_code, bill_from, bill_to, state=None, 
 
 def _determinant_for(component, determinants):
     variant = component.get("variant")
-    determinant_type = DETERMINANT_VARIANTS.get(variant, "total_consumption")
+    determinant_type = (
+        component.get("determinant_type")
+        or DETERMINANT_VARIANTS.get(variant)
+        or DETERMINANT_COMPONENT_TYPES.get(
+            component.get("component_type"), "total_consumption"
+        )
+    )
     if determinant_type not in determinants:
         raise ValueError(
             f"Component {component.get('id')} requires missing determinant "
@@ -124,9 +305,16 @@ def evaluate_component(component, determinants):
         _, quantity = _determinant_for(component, determinants)
         return rate * quantity
     if unit == "usd_per_kw":
-        if "demand" not in determinants:
+        component_demands = determinants.get("demand_by_component_type", {})
+        if not isinstance(component_demands, dict):
+            raise ValueError("Component-specific demand values must be an object.")
+        if component.get("component_type") in component_demands:
+            demand = component_demands[component["component_type"]]
+        elif "demand" in determinants:
+            demand = determinants["demand"]
+        else:
             raise ValueError("Component requires missing determinant 'demand'.")
-        return rate * as_decimal(determinants["demand"])
+        return rate * as_decimal(demand)
     if unit in {"usd_per_month", "usd_per_unit_month"}:
         return rate
     raise ValueError(
@@ -197,6 +385,66 @@ def evaluate_component_group(components, determinants):
     return amount
 
 
+def _representation_family(component):
+    category = component.get("billing_category")
+    if category:
+        family = str(category).casefold().strip()
+        variant = component.get("variant")
+        family = re.sub(
+            r"\s*\(\s*(?:generation|distribution|total)\s*\)\s*$",
+            "",
+            family,
+            flags=re.IGNORECASE,
+        ).strip()
+        if variant in {"generation", "distribution", "total"}:
+            family = re.sub(
+                rf"\s*[-–—]\s*{variant}\s*$", "", family, flags=re.IGNORECASE
+            ).strip()
+        return family
+    return component.get("component_type")
+
+
+def _representation_variant(component):
+    variant = component.get("variant")
+    if variant in {"generation", "distribution", "total"}:
+        return variant
+    category = str(component.get("billing_category") or "")
+    match = re.search(
+        r"\(\s*(generation|distribution|total)\s*\)\s*$",
+        category,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).casefold() if match else variant
+
+
+def _select_representations(components):
+    groups = {}
+    for component in components:
+        key = (
+            _representation_family(component),
+            component.get("unit"),
+            component.get("season"),
+            component.get("tier_min"),
+            component.get("tier_max"),
+            component.get("tier_unit"),
+            component.get("billing_class"),
+        )
+        groups.setdefault(key, []).append(component)
+
+    selected = []
+    for group in groups.values():
+        variants = {_representation_variant(component) for component in group}
+        if "total" in variants and variants.intersection({"generation", "distribution"}):
+            selected.extend(
+                component
+                for component in group
+                if _representation_variant(component) == "total"
+            )
+        else:
+            selected.extend(group)
+    return selected
+
+
 def _season_for_month(conn, version_id, bill_to):
     rows = conn.execute(
         """
@@ -262,6 +510,7 @@ def evaluate_schedule_components(
             if component.get("season") is None
             or component.get("season") == active_season
         ]
+    selected = _select_representations(selected)
     selected.sort(
         key=lambda component: (
             component.get("component_type") or "",

@@ -563,14 +563,23 @@ def parse_prose_rates(group, code):
 def rule_rows(group, code, printed, entry_name):
     rules = []
     sheets = group["sheets"]
-    rules.append(("schedule_designation",
-                  f"Printed designation: {printed}; name: {entry_name or group.get('name') or 'not printed'}; "
-                  f"sheets {sheets[0]} to {sheets[-1]}; PDF pages "
-                  f"{group['pages'][0]['n']}-{group['pages'][-1]['n']}."))
+    first_page = group['pages'][0]['n']
+    rules.append({
+        "rule_type": "schedule_designation",
+        "rule_text": f"Printed designation: {printed}; name: {entry_name or group.get('name') or 'not printed'}; "
+                     f"sheets {sheets[0]} to {sheets[-1]}; PDF pages "
+                     f"{group['pages'][0]['n']}-{group['pages'][-1]['n']}.",
+        "source_page": first_page,
+        "citation_status": "cited",
+    })
     if len(group["dates"]) > 1:
-        rules.append(("sheet_effective_dates",
-                      "The book prints different effective dates on this schedule's sheets: "
-                      + ", ".join(group["dates"]) + f"; the version carries the latest ({group['effective_from']})."))
+        rules.append({
+            "rule_type": "sheet_effective_dates",
+            "rule_text": "The book prints different effective dates on this schedule's sheets: "
+                        + ", ".join(group["dates"]) + f"; the version carries the latest ({group['effective_from']}).",
+            "source_page": first_page,
+            "citation_status": "cited",
+        })
     lines = []
     for page in group["pages"]:
         started = False
@@ -596,17 +605,28 @@ def rule_rows(group, code, printed, entry_name):
             continue
         for rule_type, pattern in RULE_HEADINGS:
             if pattern.search(heading.upper()):
-                rules.append((rule_type, f"{heading}: {text}"))
+                rules.append({
+                    "rule_type": rule_type,
+                    "rule_text": f"{heading}: {text}",
+                    "source_page": None,
+                    "citation_status": "uncited",
+                })
                 break
         else:
             if heading.upper().startswith(("MONTHLY RATE", "RATE")):
                 for sentence in re.split(r"(?<=\.)\s+", text):
                     if TOU.search(sentence):
-                        rules.append(("tou_periods", sentence.strip()))
+                        rules.append({
+                            "rule_type": "tou_periods",
+                            "rule_text": sentence.strip(),
+                            "source_page": None,
+                            "citation_status": "uncited",
+                        })
     seen, out = set(), []
     for rule in rules:
-        if rule not in seen:
-            seen.add(rule)
+        rule_key = (rule["rule_type"], rule["rule_text"])
+        if rule_key not in seen:
+            seen.add(rule_key)
             out.append(rule)
     return out
 
@@ -684,7 +704,7 @@ def analyse_book(source):
 
 
 def _note_rules(notes):
-    return [("parse_note", n) for n in notes]
+    return [{"rule_type": "parse_note", "rule_text": n, "source_page": None, "citation_status": "uncited"} for n in notes]
 
 
 def _ranges(numbers):
@@ -711,11 +731,16 @@ def _store(conn, analysis, source_label):
             "SELECT id FROM tariff_versions WHERE state = ? AND utility = ? AND schedule_code = ? "
             "AND version = ? AND effective_from = ? ORDER BY id DESC LIMIT 1", identity).fetchone()
         if existing:
+            conn.execute(
+                "UPDATE tariff_versions SET schedule_kind = ? WHERE id = ?",
+                (version["kind"], existing[0]),
+            )
             summary["existing"].append({"schedule_code": version["schedule_code"], "version_id": existing[0]})
             continue
         cursor = conn.execute(
-            "INSERT INTO tariff_versions(state, utility, schedule_code, version, effective_from, status) "
-            "VALUES (?, ?, ?, ?, ?, 'draft')", identity)
+            "INSERT INTO tariff_versions(state, utility, schedule_code, version, effective_from, "
+            "status, schedule_kind) VALUES (?, ?, ?, ?, ?, 'draft', ?)",
+            (*identity, version["kind"]))
         version_id = cursor.lastrowid
         for c in version["components"]:
             tier = c["tier"] or (None, None, None)
@@ -726,9 +751,9 @@ def _store(conn, analysis, source_label):
                 (version_id, c["component_type"], c["billing_category"], float(c["rate"]), c["unit"],
                  None if tier[0] is None else float(tier[0]), None if tier[1] is None else float(tier[1]),
                  tier[2], c["season"], c["variant"], c["billing_class"], c["source_page"], c["source_cell"]))
-        for rule_type, text in version["rules"]:
-            conn.execute("INSERT INTO tariff_rules(tariff_version_id, rule_type, rule_text) VALUES (?, ?, ?)",
-                         (version_id, rule_type, text))
+        for rule in version["rules"]:
+            conn.execute("INSERT INTO tariff_rules(tariff_version_id, rule_type, rule_text, source_page, citation_status) VALUES (?, ?, ?, ?, ?)",
+                         (version_id, rule["rule_type"], rule["rule_text"], rule.get("source_page"), rule.get("citation_status", "uncited")))
         summary["created"].append({"schedule_code": version["schedule_code"], "version_id": version_id,
                                    "components": len(version["components"]), "rules": len(version["rules"])})
     for item in analysis["declined"]:

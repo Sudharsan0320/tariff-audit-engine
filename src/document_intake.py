@@ -20,10 +20,12 @@ import pdfplumber
 try:
     from src import db
     from src import parse_rider as dominion_rider
+    from src import parse_rider_gen
     from src.parser_contract import rider_adapter
 except ImportError:
     import db
     import parse_rider as dominion_rider
+    import parse_rider_gen
     from parser_contract import rider_adapter
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,9 +40,14 @@ INGESTED = "ingested"
 SAVED_UNSUPPORTED = "saved_unsupported"
 SAVED_UNIDENTIFIED = "saved_unidentified"
 
+# A commission-form book number: "P.S.C. of D.C. No. 1" (the regulator's number for the book).
+COMMISSION_BOOK_NUMBER = re.compile(
+    r"\bP\.\s?S\.\s?C\.?\s+of\s+((?:[A-Z][A-Za-z]*\.?\s*){1,4}?)No\.?\s*(\d+)")
+
 # Document-identity probes: headings and markers only.
 TARIFF_PROBES = (
     ("tariff book number", re.compile(r"\bTARIFF\s+NO\.?\s*\d+", re.I)),
+    ("commission tariff book number", COMMISSION_BOOK_NUMBER),
     ("standard rate schedules heading", re.compile(r"STANDARD\s+RATE\s+SCHEDULES", re.I)),
     ("tariff sheet marker", re.compile(r"\bSheet No\.\s*\d")),
     ("amendment to electric service agreement",
@@ -60,6 +67,7 @@ BILL_PROBES = (
 UTILITIES = {
     "dominion_va": {
         "name": "Dominion Energy Virginia",
+        "short_name": "Dominion",
         "legal_name": "Virginia Electric and Power Company",
         "name_probes": (
             re.compile(r"VIRGINIA\s+ELECTRIC\s+AND\s+POWER\s+COMPANY", re.I),
@@ -75,15 +83,30 @@ UTILITIES = {
         "name_probes": (re.compile(r"APPALACHIAN\s+POWER\s+COMPANY", re.I),),
         "state_probes": (("VA", re.compile(r"VIRGINIA\s+S\.C\.C\.|VA\.\s*S\.C\.C\.", re.I)),),
     },
+    # Identified by the name the book prints. No fixed state: the book's own printed state
+    # (generic state-name detection) decides, since the company files tariffs in more than one.
+    "pepco_dc": {
+        "name": "Pepco",
+        "legal_name": "Pepco",
+        "name_probes": (re.compile(r"\bPepco\b"),),
+        "state_probes": (),
+    },
 }
 
 VERSION_PROBES = (
     ("amendment", re.compile(r"AMENDMENT\s+NO\.?\s*(\d+)", re.I)),
     ("tariff_no", re.compile(r"TARIFF\s+NO\.?\s*(\d+)", re.I)),
+    ("commission_no", COMMISSION_BOOK_NUMBER),
 )
 EFFECTIVE_PROBES = (
+    # "Date Effective: Usage on and after October 1, 2026" — a few words between the label and the date.
+    re.compile(r"Effective:?\s+(?:[A-Za-z]+\s+){0,4}?(?:on\s+and\s+after|on\s+or\s+after)\s+"
+               r"([A-Z][a-z]+\s+\d{1,2},\s*\d{4})"),
     re.compile(r"Effective:?\s+([A-Z][a-z]+\s+\d{1,2},\s*\d{4})"),
     re.compile(r"as of\s+([A-Z][a-z]+\s+\d{1,2},\s*\d{4})\s*\(the", re.I),
+)
+RIDER_DESIGNATION_PROBES = (
+    ("rider_gen", re.compile(r"RIDER\s+GEN(?:\s|,|$)", re.I)),
 )
 MONTHS = {m: i for i, m in enumerate(
     ("january", "february", "march", "april", "may", "june", "july", "august",
@@ -103,6 +126,106 @@ class AdapterRefused(IntakeError):
         self.failures = failures or []
 
 
+# ---------------------------------------------------------------- plain words
+STATE_NAMES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois",
+    "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota",
+    "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon",
+    "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+    "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia",
+    "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+}
+_STATE_PATTERNS = sorted(
+    ((abbr, re.compile(r"\b" + r"\s+".join(name.split()) + r"\b", re.I)) for abbr, name in STATE_NAMES.items()),
+    key=lambda item: -len(STATE_NAMES[item[0]]),
+)
+RAW_STATUS_NOTES = {
+    PARSED: "parsed",
+    INGESTED: "ingested",
+    SAVED_UNSUPPORTED: "saved_unsupported",
+    SAVED_UNIDENTIFIED: "saved_unidentified",
+}
+
+
+def company_label(detection):
+    """'Dominion (Virginia Electric and Power Company)', or None when no company was recognised."""
+    entry = UTILITIES.get(detection.get("utility_id"))
+    if entry is None:
+        return None
+    if entry.get("short_name"):
+        return f"{entry['short_name']} ({entry['legal_name']})"
+    return entry["name"]
+
+
+def kind_label(detection, kind=None):
+    doc_kind = detection.get("doc_kind")
+    if doc_kind == BILL:
+        return "bill"
+    if doc_kind == TARIFF:
+        if detection.get("rider_designation") or kind == "rider":
+            return "rider"
+        return "tariff schedule"
+    return "other"
+
+
+def plain_words(detection, status, *, kind=None, result=None):
+    """What the person uploading sees: company, state, document kind, and the outcome as a sentence.
+
+    `status` is a routing status (parsed/ingested/saved_*), 'draft'/'active' (a stored version's
+    state), 'bill_loaded', or 'refused_bill' / 'refused_tariff' (wrong endpoint for the document).
+    The raw status stays alongside as secondary detail.
+    """
+    result = result or {}
+    company = company_label(detection)
+    state = STATE_NAMES.get(detection.get("state"), detection.get("state"))
+    kind_text = kind_label(detection, kind)
+    where = f"{company}, {state}" if company and state else company
+    if status == "refused_bill":
+        outcome = "This looks like a bill, not a tariff document — nothing was loaded as rates."
+    elif status == "refused_tariff":
+        outcome = "This looks like a tariff document, not a bill — nothing was loaded."
+    elif status == "bill_loaded":
+        outcome = (f"Loaded as a bill{' for ' + company if company else ''} — "
+                   "usage history is now stored and usable for audits.")
+    elif status == "unchanged":
+        outcome = f"This {kind_text} was already loaded — nothing was changed."
+    elif status in ("draft", PARSED):
+        outcome = f"Loaded as a {company + ' ' if company else ''}{kind_text}"
+        if status == "draft":
+            outcome += " — rates are stored as a validated draft; activate it before audits can use it."
+        else:
+            outcome += " — rates are now stored and usable for audits."
+    elif status == INGESTED:
+        created, existing = result.get("versions_created", 0), result.get("versions_existing", 0)
+        live, held = len(result.get("activated", [])), len(result.get("stayed_draft", []))
+        queued = result.get("queued_for_review")
+        queue_text = f"; {queued} items are queued for review" if queued else ""
+        if created == 0:
+            outcome = (f"The {where} tariff book was already stored — all {existing} schedule versions "
+                       f"matched, nothing new was created{queue_text}.")
+        else:
+            outcome = (f"Loaded the {where} tariff book — {created} new schedule versions created "
+                       f"({live} went live, {held} stayed as drafts), {existing} already stored{queue_text}.")
+    elif status == SAVED_UNSUPPORTED and company:
+        outcome = (f"Saved under {where}, but this document type isn't readable yet — "
+                   "nothing was guessed or stored as rates.")
+    else:
+        outcome = "Couldn't identify this document — it was saved for review and nothing was changed."
+    return {
+        "company": company or "company not recognized",
+        "state": state,
+        "kind": kind_text,
+        "outcome": outcome,
+        "status": RAW_STATUS_NOTES.get(status, status),
+        "detail": result.get("message"),
+    }
+
+
 # ---------------------------------------------------------------- save
 def content_path(sha256, upload_dir):
     return Path(upload_dir) / f"{sha256}.pdf"
@@ -118,7 +241,7 @@ def save_upload(data, original_filename, upload_dir):
     return path, sha256, len(data)
 
 
-def record_intake(path, original_filename, detection, status):
+def record_intake(path, original_filename, detection, status, plain=None):
     """Sidecar next to the stored file: what it was identified as and how it was routed."""
     sidecar = Path(path).with_suffix(".intake.json")
     sidecar.write_text(
@@ -131,12 +254,31 @@ def record_intake(path, original_filename, detection, status):
                 "state": detection["state"],
                 "version_label": detection["version_label"],
                 "effective_date": detection["effective_date"],
+                "plain": plain,
             },
             indent=2,
         ),
         encoding="utf-8",
     )
     return sidecar
+
+
+def list_intakes(upload_dir):
+    """Past uploads, newest first, each with the same plain-words fields the upload result shows."""
+    rows = []
+    for sidecar in Path(upload_dir).glob("*.intake.json"):
+        try:
+            info = json.loads(sidecar.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        plain = info.get("plain")
+        if plain is None:
+            detection = {"doc_kind": info.get("doc_kind"), "utility_id": next(
+                (k for k, v in UTILITIES.items() if v["name"] == info.get("utility")), None),
+                "state": info.get("state"), "rider_designation": None}
+            plain = plain_words(detection, info.get("status"))
+        rows.append({"file": info.get("original_filename"), "uploaded_at": sidecar.stat().st_mtime, **plain})
+    return sorted(rows, key=lambda row: row["uploaded_at"], reverse=True)
 
 
 # ---------------------------------------------------------------- identify
@@ -146,6 +288,29 @@ def _iso_date(text):
     if not month:
         return None
     return f"{int(match.group(3)):04d}-{month:02d}-{int(match.group(2)):02d}"
+
+
+def state_from_printed_names(pages):
+    """The state a book prints most often by full name (all states plus the District of Columbia).
+
+    Longer names are consumed first so "West Virginia" is not also counted as "Virginia".
+    Returns (abbreviation, page, text), or None when no state is named or the top two tie.
+    """
+    counts, first = {}, {}
+    for number, text in pages:
+        flat = " ".join(text.split())
+        for abbr, pattern in _STATE_PATTERNS:
+            for match in pattern.finditer(flat):
+                counts[abbr] = counts.get(abbr, 0) + 1
+                first.setdefault(abbr, (number, match.group(0)))
+            flat = pattern.sub(" ", flat)
+    if not counts:
+        return None
+    ranked = sorted(counts.items(), key=lambda item: -item[1])
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+    abbr = ranked[0][0]
+    return abbr, first[abbr][0], first[abbr][1]
 
 
 def _first_hits(probes, pages):
@@ -168,6 +333,7 @@ def identify_document(path):
         "state": None,
         "version_label": None,
         "effective_date": None,
+        "rider_designation": None,
         "evidence": [],
         "reasons": [],
         "pages_scanned": 0,
@@ -226,6 +392,12 @@ def identify_document(path):
                         break
                 if record["state"]:
                     break
+            if record["state"] is None:
+                printed = state_from_printed_names(pages)
+                if printed:
+                    record["state"] = printed[0]
+                    record["evidence"].append({"probe": f"state ({printed[0]}) from printed name",
+                                               "page": printed[1], "text": printed[2]})
             break
     if record["utility"] is None and record["doc_kind"] != UNKNOWN:
         record["reasons"].append("utility not recognised from the document's identity text")
@@ -238,9 +410,12 @@ def identify_document(path):
             for number, text in joined:
                 match = pattern.search(text)
                 if match:
-                    record["version_label"] = (
-                        f"Amendment No. {match.group(1)}" if label == "amendment" else f"Tariff No. {match.group(1)}"
-                    )
+                    if label == "amendment":
+                        record["version_label"] = f"Amendment No. {match.group(1)}"
+                    elif label == "commission_no":
+                        record["version_label"] = f"P.S.C. of {match.group(1).strip()} No. {match.group(2)}"
+                    else:
+                        record["version_label"] = f"Tariff No. {match.group(1)}"
                     record["evidence"].append({"probe": "version", "page": number, "text": match.group(0)})
                     break
             if record["version_label"]:
@@ -255,10 +430,35 @@ def identify_document(path):
                     break
             if record["effective_date"]:
                 break
+        
+        for label, pattern in RIDER_DESIGNATION_PROBES:
+            for number, text in joined:
+                match = pattern.search(text)
+                if match:
+                    # For GEN rider: verify "GENERATION FACILITIES PROJECTS" also appears on the same page
+                    if label == "rider_gen":
+                        if "GENERATION FACILITIES PROJECTS" not in text:
+                            continue
+                    record["rider_designation"] = label.replace("rider_", "").upper()
+                    record["evidence"].append({"probe": "rider designation", "page": number,
+                                               "text": " ".join(match.group(0).split())})
+                    break
+            if record["rider_designation"]:
+                break
     return record
 
 
 # ---------------------------------------------------------------- adapters
+def gen_rider_adapter(kind=None, code=None):
+    """GEN rider adapter: routes GEN-designated rider sheets to parse_rider_gen."""
+    def parse(source, target):
+        try:
+            return parse_rider_gen.parse_rider_gen(pdf_path=source, database_path=target)
+        except Exception as error:
+            raise AdapterRefused("The GEN rider could not be parsed.", [f"{type(error).__name__}: {error}"])
+    return parse
+
+
 def dominion_adapter(kind, code):
     """The existing Amendment 12 parsers as a contract-shaped adapter: parse_fn(source, target)."""
     if kind not in ("schedule", "rider"):
@@ -356,38 +556,51 @@ def _apco_accepts(detection, kind=None):
 
 
 def ai_book_adapter(kind=None, code=None, client=None):
-    """Every detected tariff that has no hand-written adapter. Drafts, then activate clean ones."""
+    """Every detected tariff that has no hand-written adapter, run by the packet coordinator.
+
+    The coordinator reads only cached readings (it has no model client), validates the rates and
+    rules sides separately, and activates a schedule only when both sides pass.
+    """
     if __package__:
-        from . import ai_extract, parse_review, activate_version as activation, validate_draft
+        from . import ai_extract, packet_pipeline
     else:
-        import ai_extract, parse_review, validate_draft
-        import activate_version as activation
+        import ai_extract, packet_pipeline
 
     def parse(source, target):
         try:
-            summary = ai_extract.parse_book(source, target, client=client)
-        except ai_extract.ExtractionUnavailable:
-            raise
+            run = packet_pipeline.run_book(source, target, client=client)
+        except packet_pipeline.ReadingMissing as error:
+            raise ai_extract.ExtractionUnavailable(f"{ai_extract.NOT_CONFIGURED} ({error})", "not_configured")
         except ai_extract.BookRefused as error:
             raise AdapterRefused("The tariff book could not be read.", [str(error)])
-        activated, drafts = [], []
+        created, existing, activated, drafts, declined = [], [], [], [], []
         with db.connect(target) as conn:
-            for item in summary["created"]:
-                failures = validate_draft.validate_drafts(conn, item["version_id"])
-                if failures:
-                    for failure in failures:
-                        parse_review.queue_item(
-                            conn, "tariff_book_section", f"version {item['version_id']}", item["schedule_code"],
-                            "validation", failure[:200], "validation_failed",
-                            f"{summary['utility']} {item['schedule_code']} stays a draft: {failure}")
-                    conn.commit()
-                    drafts.append({**item, "problems": failures})
-                    continue
-                activation.activate_with_alert(conn, item["version_id"])
-                activated.append(item)
-        summary["activated"], summary["draft"] = activated, drafts
-        summary["queued"] += len(drafts)
-        return summary
+            for row in run["table"]:
+                outcome = row["outcome"]
+                if outcome.startswith("existing version"):
+                    existing.append({"schedule_code": row["schedule"], "version_id": int(outcome.split()[2].rstrip(";"))})
+                elif outcome.startswith("not stored"):
+                    declined.append({"schedule_code": row["schedule"], "reason": outcome,
+                                     "signal": (row["signals"] or [None])[0]})
+                else:
+                    item = {"schedule_code": row["schedule"], "version_id": row["version_id"],
+                            "components": row["components"], "rules": row["rules_stored"]}
+                    created.append(item)
+                    if outcome == "activated":
+                        activated.append(item)
+                    else:
+                        problems = [r[0] for r in conn.execute(
+                            "SELECT detail FROM packet_gates WHERE tariff_version_id = ? AND passed = 0",
+                            (row["version_id"],)).fetchall()]
+                        drafts.append({**item, "problems": problems})
+        return {
+            "tariff_number": run["tariff_number"], "state": run["state"], "utility": run["utility"],
+            "created": created, "existing": existing, "activated": activated, "draft": drafts,
+            "declined": declined, "queued": sum(r["queued"] for r in run["table"]),
+            "unreadable_pages": run["unreadable_pages"], "model_calls": run["model_calls"],
+            "structured_calls": run["structured_calls"], "structured": run["structured"],
+            "packet_table": run["table"],
+        }
 
     return parse
 
@@ -405,12 +618,27 @@ def route_tariff(path, detection, *, target=None, kind=None, code=None, adapters
     """Route a detected tariff to its utility's adapter, or say plainly that none exists.
 
     A hand-written adapter wins where one is registered (Dominion). With the default registry,
-    every other detected utility tariff uses the AI adapter.
+    every other detected utility tariff uses the AI adapter. GEN-designated rider sheets route
+    to the GEN parser regardless of other conditions.
     """
     using_default = adapters is None
     adapters = ADAPTERS if adapters is None else adapters
     if detection["doc_kind"] == BILL:
         raise IntakeError("this document was identified as a bill, not a tariff.")
+    
+    if detection["doc_kind"] == TARIFF and detection["rider_designation"] == "GEN":
+        parse_fn = gen_rider_adapter()
+        try:
+            version_id, count = parse_fn(path, target)
+            return {"status": PARSED, "version_id": version_id, "components": count}
+        except AdapterRefused as error:
+            return {
+                "status": SAVED_UNSUPPORTED,
+                "versions_created": 0,
+                "message": f"The file is saved and identified as a {detection['utility']} GEN rider, but {error.message}; "
+                           "no version was created.",
+            }
+    
     if detection["doc_kind"] != TARIFF or detection["utility_id"] is None:
         return {
             "status": SAVED_UNIDENTIFIED,

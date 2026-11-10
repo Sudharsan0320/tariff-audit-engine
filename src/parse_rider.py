@@ -304,13 +304,17 @@ def ensure_rider_version(conn, rider_code):
         identity_values,
     ).fetchone()
     if existing is not None:
+        conn.execute(
+            "UPDATE tariff_versions SET schedule_kind = 'rider' WHERE id = ?",
+            (existing[0],),
+        )
         return existing[0]
     version_values = (*identity_values, "draft")
     cursor = conn.execute(
         """
         INSERT INTO tariff_versions(
-            state, utility, schedule_code, version, effective_from, status
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            state, utility, schedule_code, version, effective_from, status, schedule_kind
+        ) VALUES (?, ?, ?, ?, ?, ?, 'rider')
         """,
         version_values,
     )

@@ -1,0 +1,13 @@
+# Airflow (B19; B30: Python 3.12): the newest 2.11.x official image that ships a python3.12 build
+# (2.11.2, found by docker manifest inspect; never Airflow 3), plus the project's own requirements
+# so DAG tasks can import src/. Pipeline code is not copied: compose mounts src/, docs/ and dags/ read-only, so the image never carries a stale copy.
+FROM apache/airflow:2.11.2-python3.12
+
+ARG AIRFLOW_VERSION=2.11.2
+ARG CONSTRAINTS=https://raw.githubusercontent.com/apache/airflow/constraints-2.11.2/constraints-3.12.txt
+
+COPY requirements.txt /tmp/tariff-requirements.txt
+RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" -r /tmp/tariff-requirements.txt \
+        --constraint "${CONSTRAINTS}"
+
+ENV PYTHONPATH=/opt/tariff

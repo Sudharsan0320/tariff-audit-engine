@@ -2782,6 +2782,8 @@ None of these is the Task 3d p. 34 sentence: "Available for electric service to 
 
 ## Stage 12 — Task 12l: staff site, accounts, and the queue display
 
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
+
 The staff console is a separate FastAPI app, `src/staff_api.py`, with its own pages and stylesheet (`src/staff_static/staff.css`). It is not a route on the customer site. Development serves it on port 8877. The customer app was not edited.
 
 Staff tables, created only on the working database: `staff_accounts` (username, salted PBKDF2-SHA256 password hash, role `reviewer` or `master`, active flag, created timestamp), `staff_account_scopes` (account, scope name), and `staff_sessions` (SHA-256 of an opaque token, account, expiry). A session cookie holds the raw token. Logged-out pages redirect to `/login`. Logged-out data calls return 401. Logout deletes the session.
@@ -2794,6 +2796,8 @@ The pre-Promotion B dump does not contain Pepco, so the browser check used a rea
 
 ## Stage 12 — Task 12m: staff review actions (clone-only)
 
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
+
 `staff_decisions` is an append-only action log with `id`, `item_id`, `account_id`, `action` (`approve`, `correct`, `dismiss`), `outcome` (`applied`, `rejected_by_gate`), optional `note`, optional JSON `corrected_payload`, and UTC `created_at`. Action code inserts decisions; it has no update or delete path. The decision page is ordered by decision id and filters entries using the same utility scope resolution as the queue. SQLite clones widen the review item's status check to allow `approved`, `dismissed`, and `corrected`; this migration preserves existing queue rows and indexes.
 
 All three actions require a session, resolve the item's utility scope in the action/data layer, and require `status = 'open'`. Reviewers and Masters use the same action path. Dismiss requires a nonblank note, records an `applied` decision, and closes the item as `dismissed`. Approve accepts an optional note, records `applied`, and closes as `approved`; it does not call any tariff storage function. Correct edits only the field named by the refusal, calls `ai_extract._verify_component` against the cited source page, and stores through `packet_pipeline.store_rates` only after that verifier passes. A rate-year correction must also select a declared rate year whose effective date is printed and resolves to a stored version; other component corrections must resolve the verified reading's effective date or existing component version. A failed gate leaves the item open, writes no component, records `rejected_by_gate` with the verifier detail and submitted payload, and shows the verifier signal on the detail page.
@@ -2803,6 +2807,8 @@ Correct is offered for `rate_year_missing`, `unit_not_in_vocabulary`, and `rate_
 Offline verification: the complete suite passed, 474 tests; staff-action and console tests passed, 14. Coverage includes sign-in, required dismissal note, unit-vocabulary choices, scope refusal, rejected-gate no-write/open-status and visible signal, applied correction through the verifier, section-version resolution, and SQLite status migration. The first 12m write-up said the named-item browser witnesses had not run because it checked only the local frozen SQLite snapshot, which has no queue/staff tables and contains 41 versions, 448 components, and 112 rules. That conclusion was incorrect: the earlier raw run evidence was from a full-data PostgreSQL clone. Task 12m-fix below repeats and records the browser sequence against a fresh clone. No primary or frozen SQLite database was written; the frozen SQLite SHA-256 remained `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`.
 
 ## Stage 12 — Task 12m-fix: fresh-clone browser witnesses and run reconciliation
+
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
 
 The original Task 12m fixture tests and full offline suite ran locally against isolated test databases. Its browser witnesses in the earlier raw run used a full-data PostgreSQL clone, not the Dominion-only `data/tariffs.db` snapshot. The first 12m report mistakenly inferred that the browser witnesses had not run after checking only that SQLite snapshot while the database environment variables were unset. The earlier raw output already showed item 117's `999.99` correction rejected by `rate_not_on_page`, item 69's $0.62 Pepco credit stored into the 2025 version (5 to 6 components), and total components increasing from 1,340 to 1,341. This task independently repeats those actions on a fresh PostgreSQL clone and records the full decision log.
 
@@ -2828,3 +2834,1045 @@ The electric reviewer’s Decisions page and the clone’s append-only table sho
 Final item statuses: 56 `dismissed`, 51 `approved`, 69 `corrected`, 117 `open`. The stored component is row 1503 on tariff version 155 (Pepco Schedule R, effective 2025-01-01): `billing_credit`, label `Billing Credit`, rate `0.62`, unit `usd_per_month`, page 6, source cell “Billing Credit - A monthly billing credit in the amount of $0.62 will be applied to the bill of each”. The failed 999.99 correction did not create a component.
 
 The full offline suite passed, 474 tests. The primary remained read-only and unchanged: components 1,340; rules 480; queue 91 open; structured rules 45 for Appalachian Power Company and 6 for Pepco; no `staff_*` tables; Pepco Schedule R's 2025 version 155 still has 5 components. Version IDs 41 and 62 resolve to Virginia Electric and Power Company and Appalachian Power Company; no row with id 44 exists in this primary. Frozen SQLite SHA-256: `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No live calls or commits.
+
+## Stage 12 — Task 12n: staff console slice 3 — immutable change history and Master revert (clone-only)
+
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
+
+Zero model calls. The primary and the frozen SQLite file were not written.
+
+### History table
+
+`staff_change_history` is created by `staff_accounts.ensure_tables` next to the other staff tables, so it exists only where the staff tables are seeded (clones). It has one row per change the console makes to tariff data:
+
+| Column | Meaning |
+|---|---|
+| `id` | entry number |
+| `account_id` | the staff account that made the change |
+| `decision_id` | the linked `staff_decisions` row (for a revert, the decision of the change it reverts) |
+| `item_id` | the queue item |
+| `change_kind` | `store`, `modify`, or `revert` |
+| `affected_table`, `affected_row_id` | the tariff row changed (today only `tariff_components`) |
+| `description` | a plain sentence saying what changed |
+| `old_value`, `new_value` | the full stored row as canonical JSON (sorted keys); `old_value` is empty for a store, `new_value` is empty for the revert of a store |
+| `reverts_history_id` | on a revert, the entry it reverts; UNIQUE |
+| `note`, `created_at` | the note and the UTC timestamp |
+
+Append-only is enforced by the database, not only by code: a trigger refuses every UPDATE and DELETE (SQLite `RAISE(ABORT)`, Postgres a plpgsql trigger function), with the message `staff_change_history is append-only`. The UNIQUE `reverts_history_id` means a second revert of one entry cannot be stored even if two requests race. No code path updates or deletes a history row.
+
+### Record on correct
+
+An applied Correct writes its history row in the same transaction as the data change, the queue-item close, and the decision; any failure rolls all of them back.
+
+- A correction that stores a new component (a section item, for example a rate-year item) writes `store`, old = none, new = the stored row. The stored row is identified by its id, not by guessing.
+- A correction of a component that is already stored (`zero_rate_unexpected`, or any `rate_not_on_page` / `unit_not_in_vocabulary` item whose source is a component id) now changes that row in place. It changes only the refused field (`rate` or `unit`) to the verified value and writes `modify` with the full old row and the full new row. In slice 2 this path inserted a second component next to the zero one, which left the zero row live. The owner approved the change (2026-11-10).
+- A refusal writes no history: a gate rejection (the decision is still logged as `rejected_by_gate`), a scope refusal, a sign-in refusal, and approve and dismiss, which change no tariff data.
+
+### Revert semantics (`src/staff_history.py`)
+
+- Master only. A reviewer gets `Only a Master account can revert a change.` (HTTP 403) and nothing is written. The scope check runs first, in the data layer.
+- The row must still equal the recorded new value; otherwise the revert is refused (`The row no longer matches the new value recorded for this change, so it was not reverted.`) and nothing is written.
+- Store-change: the stored row is deleted. Modify-change: only the columns that differ are set back to the old values, and the restored row must equal the recorded old JSON exactly, or the transaction rolls back.
+- The queue item returns to `open` (reviewer, resolution note, and resolved time cleared; the decision log keeps them).
+- The revert writes its own `revert` entry: old = the row as it was before the revert, new = the restored row (none for a store), `reverts_history_id` = the original, with the Master's note. The original entry is never edited. A reverted entry cannot be reverted again, and a revert entry cannot itself be reverted (HTTP 409).
+
+### History view and scope
+
+`/history` lists entries newest first in the queue's plain-words style (when, who, company, schedule, item, kind of change, what changed, old and new in short words, note, status "In effect" / "Reverted by change #n" / "Revert of change #n"), and Masters see a Revert button on revertible entries. `/history/{id}` shows one entry with its old and new JSON verbatim. The JSON API is `/api/history`, `/api/history/{id}`, `/api/history/{id}/revert`. An entry's utility is derived the way the queue derives it: from its queue item, and when the item names none, from the affected row's version. A reviewer sees only its own scopes; a Master sees every scope on record. A direct request for an out-of-scope entry is refused in `history_entry` with `This item is outside your scope.` (HTTP 403), not just hidden by the page.
+
+### Browser witnesses (fresh clone `tariff_12n_history_20261110`)
+
+The clone is a `pg_dump` of the current primary (it includes Pepco; the pre–Promotion B backup does not). Staff tables and the three accounts (electric reviewer, Master scoped electric, water reviewer) were seeded with fresh passwords. Counts are open queue / components / rules / history.
+
+| Step | Result | Counts after |
+|---|---|---|
+| Opening state | — | 91 / 1,340 / 480 / 0 |
+| Electric reviewer corrects item 69 (Pepco R, $0.62 billing credit) to Rate Year 1 | "Corrected. Stored 1 component on version 155."; item 69 `corrected`; version 155 goes from 5 to 6 components | 90 / 1,341 / 480 / 1 |
+| Electric reviewer corrects item 3 (`zero_rate_unexpected`, Rider PIPP-CM component 307, p. 109) with the printed value 0 | Refused by the gate: `quote_not_found`, "source quote not on page 109"; decision 2 logged `rejected_by_gate`; component 307 stays 0; no history row | 90 / 1,341 / 480 / 1 |
+| Electric reviewer reverts entry 1 (direct requests; no Revert button is shown to a reviewer) | `/api/history/1/revert` and `/history/1/revert` both HTTP 403 "Only a Master account can revert a change." | unchanged |
+| Master reverts entry 1 (note "Slice 3 witness: revert the store-change.") | "Reverted. Logged as change #2."; row 1503 deleted; version 155 back to 5; item 69 `open` | 91 / 1,340 / 480 / 2 |
+| Master reverts entry 1 again | HTTP 409 "This change has already been reverted." | unchanged |
+| Water reviewer opens History | "Entries 0 — No changes in your departments."; `/api/history` returns `{"count":0,"entries":[]}`; `/api/history/1` and `/history/1` HTTP 403 "This item is outside your scope." | unchanged |
+
+Entry 1 (store): item 69, decision 1, `tariff_components` row 1503, old none, new `{"billing_category": "Billing Credit", "billing_class": null, "component_type": "billing_credit", "formula": null, "id": 1503, "rate": 0.62, "season": null, "source_cell": "Billing Credit - A monthly billing credit in the amount of $0.62 will be applied to the bill of each", "source_page": 6, "tariff_version_id": 155, "tier_max": null, "tier_min": null, "tier_unit": null, "unit": "usd_per_month", "variant": null}`, note "stored 1 component on version 155". Its `row_to_json` output was byte-identical before and after the revert. Entry 2 (revert): Master, `reverts_history_id` 1, old = the same row, new none. On the clone, a direct `UPDATE` and `DELETE` on `staff_change_history` both failed with `staff_change_history is append-only`; the count stayed 2.
+
+The task expected history 3 after the revert (two corrections plus the revert). It is 2, because the zero-rate correction was refused. All 14 `zero_rate_unexpected` items are Dominion components printed as zero (Schedule 132 p. 27 "$0.000 per kW"; Rider PIPP-CM p. 109 "0.000 cents"). The correction gate cannot verify any of them: the slice-2 book lookup finds no Dominion source book (`_books_for` returns none: document detection names the Dominion PDFs "Dominion Energy Virginia", while the stored versions carry "Virginia Electric and Power Company"; and even with matching names there are two Dominion tariff PDFs, Amendment 12 and `rider-gen.pdf`, so `_book_for`'s single-book rule would still find none), and the stored locators are wrapped (`text "…"`, `line "…"`), so no quote check can pass. The owner ruled (2026-11-10) that this refusal is the gate working correctly and must not be bypassed. The modify and modify-revert paths therefore rest on tests, and the **Dominion source-book gap is recorded as a finding for a later task**.
+
+### Tests and close-out
+
+`tests/test_staff_history.py` (12, local-only) covers the store history row's full new value and empty old value; an in-place modify with both full rows; exact prior-state restore for a store revert and a modify revert (full component table compared); a revert logging itself while the original row stays identical; refusal of a double revert and of reverting a revert; reviewer revert refused with nothing written; scope filtering, Master seeing all scopes, and direct-access refusal through the API and the page; no history from a gate rejection, a scope refusal, or approve; database refusal of UPDATE and DELETE on history; and the changed-since guard. Full suite with the database env unset: 486 passed (474 + 12). Primary unchanged: 91 open queue items, 1,340 components, 480 rules, no staff tables. Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+## Stage 12 — Task 12o: staff console slice 4 — notification outbox and file transport (clone-only)
+
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
+
+Zero model calls. No email was sent, and no credentials were created, used or printed. The primary and the frozen SQLite file were not written.
+
+### Outbox shape
+
+`staff_accounts` gains a nullable `email` column (`_ensure_email_column` adds it to older clone tables). An account without an email gets no notifications; login, queue and history are unchanged. `seed_staff.py` reads each account's email from `STAFF_SEED_<ACCOUNT>_EMAIL` next to its password and prints neither.
+
+`staff_notification_outbox` is created by `staff_accounts.ensure_tables`, so it exists only where the staff tables are seeded (clones):
+
+| Column | Meaning |
+|---|---|
+| `id` | outbox row; also names the message file |
+| `recipient_account_id`, `recipient_email` | who, with the address as it was when the row was written |
+| `event_type` | `new_queue_item` or `activation_failed` |
+| `ref_kind`, `ref_id` | `queue_item` + item id, or `tariff_version` + version id |
+| `subject`, `body` | plain words: company, schedule, the reason in plain words, and the cited page where there is one |
+| `status` | `pending`, `sent` or `failed` |
+| `created_at`, `sent_at`, `error` | when written, when sent, and the transport's error text on failure |
+
+UNIQUE `(event_type, ref_id, recipient_account_id)` forbids a second row for one event, item and recipient. The writer also checks before inserting, so a repeat write adds nothing rather than raising.
+
+### Recipient rule
+
+The recipients are the active accounts with a non-blank email whose scopes include the event utility's scope, plus every active Master. The utility is derived exactly as the queue derives it (`staff_queue.utility_for` through `_present`); for `activation_failed` it is the version's own utility. An item whose utility has no scope on record, or a scope that no account holds, goes to Masters only.
+
+### Event wiring points
+
+- `parse_review.queue_item` is the shared creation helper. After its INSERT it calls `staff_notify.notify_new_item(conn, item_id)` on the same connection, before the caller's commit, so the rows join the item's transaction. Callers covered: `ai_extract.py:963`, `document_intake.py:539`, `parse_apco.py:760`, `packet_pipeline._queue_items` (all coordinator queueing: admission, rates, rules, rate-year, structured stage, `rerun_side`) and `packet_pipeline._finish` (validation failures), and `structured_rules.py:226`.
+- `parse_review.scan_for_review` had its own INSERT. It now calls `queue_item`, with the same idempotent check and the same counts.
+- `queue_item` inserts only when the item is new, so a book re-run or a re-verified section creates no item and therefore no notification. The outbox UNIQUE rule is a second guard.
+- `packet_pipeline._finish` now reads the gate rows before its commit. When either side is not passed, it calls `staff_notify.notify_activation_failed(conn, version_id, failed)` in the same transaction as the gate result, then commits; activation happens only when no side failed, as before. A side with no gate row is reported as "gate not recorded", not as a failed check.
+- With no outbox table (the primary, and every non-staff test database), both notify functions are no-ops: they test for the table with a read-only `sqlite_master` lookup and never create it.
+
+### Transport design (`src/staff_notify.py`)
+
+`drain(conn, transport)` takes the `pending` and `failed` rows in id order and hands each to `transport.send(message)`. On success the row becomes `sent` with `sent_at` and its error cleared; on any exception it becomes `failed` with `"<ExceptionType>: <message>"` and the drain moves on. Each row commits on its own. The CLI is `python -m src.staff_notify --transport file|smtp`.
+
+- `FileTransport` writes `message-<row id>.txt` (To, Subject, Event, Outbox row, blank line, body) into `STAFF_OUTBOX_DIR`, opening the file in exclusive-create mode. An unset directory raises `TransportNotConfigured`.
+- `SmtpTransport` reads `STAFF_SMTP_HOST`, `STAFF_SMTP_PORT` and `STAFF_MAIL_FROM` and raises `SMTP transport is not configured: <names> not set.` when they are missing. It is not used in any witness.
+
+The Outbox page `/outbox` and `/api/outbox` list rows newest first (recipient, event, subject, status, sent time, error). `staff_notify.outbox_rows` refuses anyone but a Master (`Only a Master account can open the outbox.`, HTTP 403), so the refusal is in the data layer and not only in the page. The Outbox link appears only for Masters.
+
+### Witnesses
+
+**Queue-item clone `tariff_12o_outbox_20261110`** (a `pg_dump` of the current primary; staff tables; electric reviewer, Master and water reviewer with `.invalid` emails). Opening state: 91 open queue items, 0 outbox rows.
+
+- Item 1: Pepco Schedule R replayed from the cache (key forced off, extractor class replaced by one that raises; 0 model calls). Component 0 (Customer Charge 17.09, p. 6) was given a transposed misread of 17.90. The coordinator's own `rates_pass` refused it (`rate '17.90' is not a number printed on page 6`, signal `rate_not_on_page`), and `packet_pipeline._queue_items` queued item 125. The pass's other failures were already queued and created nothing. Outbox: exactly 2 rows, electric reviewer and Master, both `pending`, none for the water reviewer; open items went to 92.
+- File drain into a writable directory: "attempted 2, sent 2, failed 0"; rows 1 and 2 `sent` at 22:01:11.81Z; files `message-1.txt` (499 bytes) and `message-2.txt` (488 bytes).
+- Item 2: component 4 (summer over-400 kWh, 0.04895) misread as 0.04859, refused the same way, item 126, rows 3 and 4. A drain into a directory with mode `dr-x------` gave "attempted 2, sent 0, failed 2"; both rows `failed` with `PermissionError: [Errno 13] Permission denied: '…/outbox_locked/message-3.txt'` (and `-4`), and the drain exited 0. Pointed back at the writable directory, the next drain gave "attempted 2, sent 2, failed 0", rows 3 and 4 `sent` at 22:01:25.52Z.
+
+**Activation scratch `tariff_12o_activation_20261110`** (a `pg_dump` of the primary; staff tables and the same accounts).
+
+- Step A: a full Appalachian replay through `run_book` from the real cache made 0 model calls and 0 structured calls (48 rows, 44 existing, 0 created, 0 queued). Queue items stayed 91 and outbox rows stayed 0: existing items notify nobody.
+- Step B: a held draft staged the way Task 12a staged its GS-TOD hold. GS-TOD version 73 was set from active to draft on the scratch only. A copy of the cache was made with GS-TOD's 16 proposed rates shifted one decimal place, and `rerun_side(GS-TOD, rates)` was run against it. No production code was changed and nothing was monkeypatched apart from the model guard. Result: `side_passed False`, `outcome held`, version 73 still `draft`, gate `rates 0 0 "no component survived verification"`.
+- That run wrote 2 `activation_failed` rows for version 73 (electric reviewer, Master), subject "Schedule did not go live: Appalachian Power Company, GS-TOD stayed a draft (rates check failed; rules gate not recorded)". It also wrote 34 `new_queue_item` rows for the 17 new GS-TOD queue items, to the same two recipients and none to the water reviewer. The rules gate is "not recorded" because the primary's Appalachian versions carry no `packet_gates` rows (Promotion A copied them without gates); `_finish` already treated a missing gate as not passed. The first run of this witness used the wording "rates, rules check failed". That was corrected to name a missing gate as not recorded, the scratch was dropped and rebuilt, and the witness was re-run; the figures above are from the re-run.
+
+**Browser** (staff site on the queue-item clone). Master's Outbox page: "Rows 4"; rows 4, 3, 2, 1 for items 126 and 125, Master and electric reviewer, all `sent`, no errors. Electric reviewer: `/outbox` HTTP 403 "Only a Master account can open the outbox."; `/api/outbox` HTTP 403 with the same message; no Outbox link on the queue page.
+
+### Tests
+
+`tests/test_staff_notify.py` (14, local-only) covers:
+- an electric item reaching the electric reviewer and Master only, and an item in a scope with no accounts reaching Master only;
+- Master always included, even with no known utility;
+- an account with no email skipped while it can still sign in and read the queue;
+- duplicate writes creating no rows, and `scan_for_review` going through the helper and notifying once;
+- a file drain marking rows sent, with each file matching its row's recipient, subject and body;
+- a failing transport marking one row failed with its error while the drain continues and a later drain sends it;
+- `activation_failed` rows from a held `_finish`, no repeat on a second `_finish`, and none on activation;
+- a missing gate worded as not recorded;
+- no outbox table meaning no notification and no table created;
+- the SMTP and file not-configured errors;
+- Master-only outbox access in the data layer, the page, the API and the queue-page link.
+
+Close-out: full suite with the database env unset, 500 passed (486 + 14). Primary unchanged: 91 open queue items, 1,340 components, 480 rules, no staff or outbox tables. Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+## Stage 12 — Task 12p: staff console onto the primary
+
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
+
+**Status: the tables landed and were verified on the primary. The owner's Master account and the signed-in browser check are PENDING, to be completed when the owner is at the machine.** No account exists on the primary yet. No decision was taken on any real queue item, nothing was drained, and no email was sent. Zero model calls.
+
+### Backup gate
+
+`data/tariff-pg-pre-staff-console.2026-11-10.sql`, 495,183 bytes (gitignored). `pg_dump` exited 0 and the file contains `-- PostgreSQL database dump complete`. It was taken before any write.
+
+### Tables created (additive only)
+
+Created with the console's own code (`staff_accounts.ensure_tables`, which also runs `ensure_history_table` and `staff_notify.ensure_outbox_table`), then `seed_electric_utilities`:
+
+- `staff_accounts` (including `email`), `staff_account_scopes`, `staff_sessions`, `utility_scopes`, `staff_decisions`;
+- `staff_change_history`, with trigger `staff_change_history_no_change` (refuses UPDATE and DELETE) and `UNIQUE (reverts_history_id)`;
+- `staff_notification_outbox`, with `UNIQUE (event_type, ref_id, recipient_account_id)`.
+
+`utility_scopes` maps Appalachian Power Company, Pepco, and Virginia Electric and Power Company to `electric`. `packet_gates` was not backfilled for Appalachian or Dominion: their missing gate rows are the recorded state, and inventing pass records would be fabrication.
+
+**Not done, deliberately: the queue status constraint.** On the primary, `parse_review_items` carries `CHECK (status IN ('open','resolved'))`. Approve, dismiss and correct write `approved`, `dismissed` or `corrected`, so the database will refuse every console decision until this constraint is widened. On the clones, `seed_staff.py` widened it through `allow_decision_statuses`. Doing that here would alter an existing table, so it was not run. The constraint is unchanged and needs its own owner decision and backup-gated step before any decision can be recorded on the primary. For the same reason the owner's account must be seeded with the single-account owner seed, not `seed_staff.py`.
+
+### Before and after (read-only)
+
+| Figure | Before | After |
+|---|---:|---:|
+| Versions: Appalachian / Pepco / Dominion | 44 / 62 / 41 | 44 / 62 / 41 |
+| Components: Appalachian / Pepco / Dominion | 573 / 319 / 448 | 573 / 319 / 448 |
+| Rules: Appalachian / Pepco / Dominion | 153 / 215 / 112 | 153 / 215 / 112 |
+| Structured rules: Appalachian / Pepco | 45 / 6 | 45 / 6 |
+| Bills / bill charges | 31 / 894 | 31 / 894 |
+| Audit runs / audit lines | 3 / 96 | 3 / 96 |
+| Queue items, all / open | 91 / 91 | 91 / 91 |
+| `packet_gates` (Pepco only) | 124 | 124 |
+| Staff, scope and outbox tables | 0 | 7 |
+| Tables in total | 15 | 22 |
+
+Content hash over every row of the 15 tables that existed before (an md5 per table over its ordered rows, then an md5 over the per-table values): before `0461fcb72f269264f77c951880c3710f`, after `0461fcb72f269264f77c951880c3710f`, identical. New table rows after the step: `utility_scopes` 3; `staff_accounts`, `staff_account_scopes`, `staff_sessions`, `staff_decisions`, `staff_change_history` and `staff_notification_outbox` all 0.
+
+### Accounts
+
+None yet (**pending**). The owner seeds his own Master account in his own terminal, with the password read silently into an environment variable (`read -rs`). Never typed into chat, printed, or written to a file, it reaches the database only as the salted PBKDF2 hash that `create_account` stores. The seed takes username, email, scopes and role from environment values, refuses an existing username, touches only the staff tables, and prints only `username`, `role`, `scopes` and whether an email is set. No other account was created and no credentials were invented.
+
+### Browser and site checks
+
+Staff site started with `STAFF_PORT=8877 PYTHONPATH=. venv/bin/python -m src.staff_api` and `TARIFF_DB_URL` pointing at the primary. It listens on `127.0.0.1:8877` only (`lsof` showed only `127.0.0.1:8877`).
+
+- Logged out: `/` gives HTTP 303 to `/login`, and the browser landed on the Sign in page. `/api/queue`, `/api/history` and `/api/outbox` each return HTTP 401 `{"message":"Sign in is required."}`.
+- The site was stopped afterwards (`pkill -f src.staff_api`) so it does not serve the primary unattended. Restart it with the same command, and stop it with Ctrl+C or the same `pkill`.
+- **Pending (owner at the machine):** Master sign-in; the queue showing the 91 open items, including item 56 and a Pepco item in plain words; History showing 0 entries; Outbox showing 0 rows. The owner signs in himself, because his real password is not handled by the assistant.
+- Customer site: `http://127.0.0.1:8000/` HTTP 200 (37,881 bytes, title "Tariff Audit Engine"); `/health` HTTP 200 `{"status":"ok",…}`.
+
+### From this point on
+
+The primary now has an outbox, so any pipeline run that creates a **new** queue item writes `new_queue_item` rows in the same transaction. A coordinator run that leaves a version as a draft writes `activation_failed` rows. Rows are written only for accounts that have an email; with no accounts yet, nothing is written. Rows stay `pending` until the owner runs the sender (`python -m src.staff_notify --transport file|smtp`). The sender was not run against the primary in this task.
+
+## Stage 12 — Task 12r: parse-review status constraint widened on the primary
+
+Zero model calls. The only persistent change on the primary is the constraint definition. No real queue item was actioned.
+
+### Finding
+
+The Task 12p landing found that the primary's `parse_review_items` allowed only `open` and `resolved`, while the staff console closes items as `approved`, `dismissed` or `corrected`. Every console action would therefore have been refused by the primary. Clones had worked only because `seed_staff.py` widened the constraint on them.
+
+### Backup
+
+`data/tariff-pg-pre-status-widening.2026-11-10.sql`, 506,905 bytes (gitignored). `pg_dump` exited 0 and the file contains `-- PostgreSQL database dump complete`. It was taken before any write.
+
+### Old and new definitions (from `pg_get_constraintdef`, name `parse_review_items_status_check`)
+
+- Before: `CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text])))`
+- After: `CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text, 'approved'::text, 'dismissed'::text, 'corrected'::text])))`
+
+The change ran in one transaction: drop `parse_review_items_status_check`, then add it back under the same name from the shared definition. Before it, the queue held 91 items, all `open`.
+
+### Code alignment (one definition)
+
+| File | Change |
+|---|---|
+| `src/review_status.py` (new) | The single definition: `STATUSES`, `CONSTRAINT_NAME`, `STATUS_CHECK`, plus a read-only `allowed_statuses(conn)` and `verify(conn)` for SQLite and Postgres. It never alters a table. |
+| `src/create_db.py` | `parse_review_items` is created with `{STATUS_CHECK}` instead of the literal `('open', 'resolved')` check. |
+| `src/staff_accounts.py` | `allow_decision_statuses` is removed: its SQLite table rebuild and its Postgres drop-and-add were the separate widening step. It is replaced by `verify_decision_statuses(conn)`, a verified no-op when the check matches `STATUSES` (or the table has no check) that raises, without altering anything, when it does not. The now-unused `import re` is removed. |
+| `src/seed_staff.py` | Calls `verify_decision_statuses` instead of `allow_decision_statuses`. Seeding a clone of an unwidened database now stops with "widen it in its own backup-gated step" instead of silently changing the table. |
+| `tests/test_staff_actions.py` (local) | The SQLite widening-migration test is replaced by two tests: a fresh `create_db` schema accepts all five statuses and refuses `bogus`; and `verify` is a no-op on the widened check and refuses a narrow one without altering its schema or rows. |
+
+Not changed, and noted: `parse_review.list_items` (the Stage 8 `?status=` filter) still accepts only `open` or `resolved`. That is query behaviour, not the constraint, so it was left alone.
+
+The primary, a fresh `pg_dump` clone of it, and an empty database built by the new `create_db.py` (`tariff_12q_fresh_20261110`) all report the identical definition above.
+
+### Rolled-back proof on the primary (item 56)
+
+Each test ran as `BEGIN; UPDATE …; SELECT …; ROLLBACK;`:
+
+| Status tried | Inside the transaction | After ROLLBACK |
+|---|---|---|
+| `approved` | `item 56 | approved` | `open | 91` |
+| `dismissed` | `item 56 | dismissed` | `open | 91` |
+| `corrected` | `item 56 | corrected` | `open | 91` |
+| `bogus` (negative control) | `ERROR: new row for relation "parse_review_items" violates check constraint "parse_review_items_status_check"` | `open | 91` |
+
+### Clone proof (`tariff_12q_status_20261110`, a `pg_dump` of the post-change primary, with clone-only test accounts)
+
+`seed_staff` passed its status check as a no-op. Starting point: 91 open, 1,340 components, 0 decisions. As the electric reviewer in a real browser:
+
+- approved item 51: "Approved. No tariff data was changed.";
+- dismissed item 50 (note "Clone proof of the widened status constraint."): "Dismissed.";
+- corrected item 69 (Pepco R, $0.62 credit) to Rate Year 1: "Corrected. Stored 1 component on version 155."
+
+Final statuses: 51 `approved`, 50 `dismissed`, 69 `corrected`, with no database refusal. Counts after: 88 open, 1,341 components, 3 decisions (all `applied`), 1 history row (the store-change), 0 outbox rows (no new queue item).
+
+### After-state on the primary
+
+Constraint as above; status distribution `open | 91`. `parse_review_items` content hash before and after: `31bbf34f30ac5db51753f25bc3e419d5`. Content hash over all 22 tables, before and after the widening: `e4a8bf0432e5af006e1a7bbcd459d606`. Every count equals the Task 12p after-state: versions 44 / 62 / 41, components 573 / 319 / 448, rules 153 / 215 / 112, structured rules 45 / 6, bills 31, charges 894, audit runs and lines 3 / 96, `packet_gates` 124 (Pepco only), 7 staff tables, 22 tables in total. Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+Suite with the database env unset: 501 passed. That is the previous 500, minus the removed widening-migration test, plus its two replacement tests.
+
+## Stage 12 — Task 12s: book-label backfill (printed book identity on every version)
+
+Zero model calls. The labels were verified by reading the PDFs' own page text.
+
+### The coverage finding that prompted it
+
+The Tariffs-page cleanup stopped at its coverage check. Every version has a `schedule_kind` (Appalachian 23 schedules / 20 riders / 1 informational, Dominion 24 / 17 / 0, Pepco 41 / 21 / 0, no NULLs), but no column stored a book name:
+
+- `version` is a bare number (28, 12, 1, 1);
+- `schedule_kind_evidence` names a source document only for Appalachian and Dominion, and is empty for all 62 Pepco versions;
+- Dominion spans two documents (Amendment No. 12 and the April 2025 Rider GEN sheet).
+
+Rendering "Tariff No." wording from a number in code would have been invented wording, so the labels are stored as evidence first. The owner chose this option (2026-11-10).
+
+### Labels, verified on the page
+
+| Company, version | `book_label` | Source document | Page | Verbatim printed line |
+|---|---|---|---:|---|
+| Appalachian Power Company, 28 (44 rows) | Virginia S.C.C. Tariff No. 28 | `APCo-Tariff-28.pdf` | 1 | "VIRGINIA S.C.C. TARIFF NO. 28" |
+| Virginia Electric and Power Company, 12 (40 rows) | Amendment No. 12 | `VEPGA-Amendment-12-Effective-July-1-2025.pdf` | 1 | "AMENDMENT NO. 12" |
+| Pepco, 1 (62 rows) | P.S.C. of D.C. No. 1 | `Pepco-DC-Tariff-2026-10-01.pdf` | 1 | "Electricity--P.S.C. of D.C. No. 1" |
+| Virginia Electric and Power Company, 1 (1 row) | Rider GEN sheet | `rider-gen.pdf` | — | none: the sheet prints no book label |
+
+Each label also repeats on later pages (for example `VA. S.C.C. TARIFF NO. 28` on pp. 2–3, and Pepco's header on every page). `rider-gen.pdf` (1 page) contains no "Tariff No.", "Amendment No." or "P.S.C. … No." text.
+
+`book_label` holds the clean title-case name. `book_evidence` holds the source document, the page and the verbatim printed line in quotes, for example `APCo-Tariff-28.pdf, page 1, printed as "VIRGINIA S.C.C. TARIFF NO. 28"`, so nothing is silently normalized.
+
+**GEN ruling (owner):** the sheet is grouped as "Rider GEN sheet", described as what it is. Its evidence reads: `rider-gen.pdf prints no book label; this version is grouped by its source document, rider-gen.pdf.` It never claims a printed label.
+
+Pepco's empty `schedule_kind_evidence` is a separate provenance gap, kept as its own item and not addressed here.
+
+### The backfill (`src/book_label_backfill.py`)
+
+- **Mapping:** keyed by (utility, version number). Each entry carries the label, the source document, the page and the verbatim printed line.
+- **Verification before writing:** the backfill re-reads each cited page with pdfplumber, whitespace-collapsed per line, and refuses to run unless the printed line is on that page.
+- **Columns:** `book_label` and `book_evidence` (TEXT, nullable) are added when missing. `create_db.py` adds the same two columns, so fresh and cloned schemas match.
+- **One transaction:** adding the columns and filling every row happen in a single transaction.
+- **Refusals, each writing nothing:** a stored `book_label` that disagrees with the mapping; any version whose (utility, version) is not mapped; a missing source PDF.
+- **Idempotent:** a second run reports `filled 0`.
+
+Existing reads were checked for knock-on effects:
+- the audit snapshot hash and the version resolvers select named columns, so audit hashes are unaffected;
+- `GET /tariff-versions[/{id}]` uses `SELECT *` and now also returns the two new keys (additive, as with `schedule_kind` in 4c);
+- `compare_databases` and the pipeline's content snapshots read every column, so a fresh pipeline build compares unequal to the live database on these two columns until the backfill is run on it, as `schedule_kind_evidence` already did after 4c.
+
+### Scratch (`tariff_12s_books_20261110`, a `pg_dump` of the primary)
+
+The first run gave `columns_added ['book_label', 'book_evidence'], filled 147, unchanged 0`: Appalachian 28 → 44, Dominion 12 → 40, Dominion 1 → 1, Pepco 1 → 62; 147 labeled, 0 NULL. The second run gave `columns_added [], filled 0, unchanged 147`.
+
+### Promotion
+
+- **Backup:** `data/tariff-pg-pre-book-labels.2026-11-10.sql`, 506,961 bytes (gitignored). `pg_dump` exited 0 and the file contains `-- PostgreSQL database dump complete`. It was taken before any write.
+- **Hashes:** the hash of `tariff_versions` over its 10 pre-existing columns (`id`, `state`, `utility`, `schedule_code`, `version`, `effective_from`, `effective_to`, `status`, `schedule_kind`, `schedule_kind_evidence`) was `985836662bc73aaf785529d7fc0cccbe` before and after. The combined per-table hash of the other 21 tables was `026d4c8478b7696068912abb5b6a6e25` before and after.
+- **The change:** the backfill ran on the primary in one transaction: `filled 147`, the same per-book counts as the scratch, 0 NULL labels.
+- **Standing counts, unchanged:** versions 44 / 62 / 41, components 573 / 319 / 448, rules 153 / 215 / 112, structured rules 45 / 6, bills 31, charges 894, audit runs and lines 3 / 96, open queue items 91, `packet_gates` 124 (Pepco only), 7 staff tables, 22 tables in total.
+- **Frozen file:** SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+Suite with the database env unset: 508 passed (501 + 7 local tests in `tests/test_book_label_backfill.py`). The first full run had 1 failure: `test_parse_review.py::test_table_upgrade_is_additive_on_an_existing_database` already excludes each additive column added since it was written (`schedule_kind`, `schedule_kind_evidence`, `source_page`, `citation_status`), and the two new empty book columns now appeared on the upgraded copy. They were added to its exclusion list, the same pattern, and no data differed. The re-run passed.
+
+## Stage 12 — Task 12t: Tariffs page cleanup (company → book → grouped schedules)
+
+Presentation and read-only API only. No database writes, no schema change, and no change to billing, repricing, intake or pipeline. Zero model calls.
+
+### Coverage check (read-only, primary)
+
+| Company | Book (`book_label`) | Versions | Schedules | Riders | Informational | NULL kind |
+|---|---|---:|---:|---:|---:|---:|
+| Appalachian Power Company | Virginia S.C.C. Tariff No. 28 | 44 | 23 | 20 | 1 | 0 |
+| Pepco | P.S.C. of D.C. No. 1 | 62 | 41 | 21 | 0 | 0 |
+| Virginia Electric and Power Company | Amendment No. 12 | 40 | 24 | 16 | 0 | 0 |
+| Virginia Electric and Power Company | Rider GEN sheet | 1 | 0 | 1 | 0 | 0 |
+
+Dominion totals 41 (24 / 17 / 0) across its two books. NULL `book_label`: 0; NULL `schedule_kind`: 0; total 147. Every expectation was met, so the build went ahead.
+
+### Page structure (`src/static/index.html`, hash routes)
+
+- `#/tariffs` (landing): a schedule search box, then one card per company with its state(s), number of books, book labels, effective span (earliest to latest `effective_from`) and pills for versions / schedules / riders / informational.
+- `#/tariffs/c/<company>`: one card per book (label, version and entry counts, kind line, span, status pills).
+- `#/tariffs/b/<company>/<book>[/<status>]`: the book titled by its stored `book_label`, with the stored `book_evidence` underneath, a status filter (All / Active / Draft / Superseded), and three panels, **Schedules**, **Riders**, **Informational**, from `schedule_kind`. Each entry (one schedule code in that book) shows its version count, latest effective date, current status (its latest version's status) and the mix of version statuses.
+  - The filter keeps an entry when at least one of its versions has the chosen status. Under a filter, a panel's version count is the total versions of the entries shown.
+  - Pepco's rate years are versions of one entry.
+- `#/tariffs/s/<company>/<book>/<code>`: the schedule's versions with effective from and to, status, and component and rule counts. Each row opens the existing version detail (`#/tariffs/<id>`), unchanged apart from a breadcrumb added above it.
+- **Breadcrumbs** on every level: Tariffs › Company › Book › Schedule (› Version #id), with the book named by `book_label`. Esc steps up one level in the Tariffs hierarchy.
+- Titles and groups come only from stored data. No company names or book titles appear in code, so a new company or book appears on its own.
+
+### Endpoints added (read-only, `src/tariff_catalog.py`)
+
+| Endpoint | Returns |
+|---|---|
+| `GET /tariff-catalog/companies` | company cards: states, books (label and versions), effective span, counts by kind and status |
+| `GET /tariff-catalog/books?utility=` | the company's books with counts, span and evidence (404 for an unknown company) |
+| `GET /tariff-catalog/book?utility=&book=&status=` | grouped entries by kind, totals and the filter result (404 unknown, 422 bad status) |
+| `GET /tariff-catalog/schedule?utility=&book=&code=` | versions with component and rule counts (404 unknown) |
+| `GET /tariff-catalog/search?q=` | schedule entries whose code contains the query, ignoring case, spaces and punctuation, each naming its company and book |
+
+No existing endpoint changed. The version endpoints keep every field and already carried `book_label` and `book_evidence` since Task 12s. No write endpoint was added.
+
+### Browser verification (live compose `api` on :8000, rebuilt with `docker compose up -d --build api`)
+
+| Level | Page shows | Database (read-only) |
+|---|---|---|
+| Landing cards | Appalachian 44 (23 / 20 / 1), "Virginia S.C.C. Tariff No. 28", 2024-07-20 → 2026-09-24; Pepco 62 (41 / 21 / 0), "P.S.C. of D.C. No. 1", 2009-11-06 → 2026-10-01; Dominion "VA · 2 books", "Amendment No. 12" and "Rider GEN sheet", 41 (24 / 17 / 0), 2025-04-01 → 2025-07-01 | 44 / 62 / 41, same kind splits |
+| Dominion company | Amendment No. 12: 40 versions · 40 entries, 24 / 16 / 0, 40 active. Rider GEN sheet: 1 version · 1 entry, 0 / 1 / 0, 1 active | 40 (40 entries, 40 active) and 1 |
+| Rider GEN sheet book | Riders: RIDER GEN, 1 version, 2025-04-01, active; evidence line "rider-gen.pdf prints no book label; …" | 1 version |
+| Appalachian book | Schedules 23 entries / 23 versions, Riders 20 / 20, Informational 1 (EXHIBIT): 44 | 44 entries, 44 active |
+| Pepco book | Schedules 21 entries / 41 versions, Riders 21 / 21, Informational 0: 62 versions, 42 entries | 42 entries, 42 active, 20 superseded |
+| Status filter, Pepco | Superseded: "Showing 19 of 42", all in Schedules (GS3A … TS, OLLED with 2 superseded); Draft: "Showing 0 of 42"; All: "Showing 42 of 42" | 19 entries carry a superseded version; 0 drafts |
+| Pepco Schedule R | #155 v1, 2025-01-01 → 2026-01-01, superseded, 5 components, 3 rules; #156 v1, 2026-01-01 → 2026-12-31, active, 5, 3 | 155: 5 / 3; 156: 5 / 3 |
+| Breadcrumb | "Tariffs › Pepco › P.S.C. of D.C. No. 1 › R"; on version #156: "… › R › Version #156", component table unchanged | — |
+| Search "gs" | 7 results: Appalachian GS, GS-TOD, LGS-TOD, SGS; Pepco GS3A, GSLV, GSND, each naming company and book; GSLV opens its schedule page (#103 / #104, 4 components) | the same 7 codes; GSLV 103 / 104, 4 components |
+| Other tabs | Home "Engine online", 147 tariff versions; Bills 31 cards; Audits 31 cards; Upload 2 tiles; no error | — |
+
+During the walk, card wording was corrected twice (a per-book "schedules" count renamed "entries", and singular forms such as "1 version") and the api rebuilt. The figures above are from the final build.
+
+### Data unchanged
+
+The hash of `tariff_versions` over its 10 pre-existing columns (`985836662bc73aaf785529d7fc0cccbe`) and the combined hash of the other 21 tables (`026d4c8478b7696068912abb5b6a6e25`) equal the Task 12s after-state, and every standing count is identical to it: versions 44 / 62 / 41, components 573 / 319 / 448, rules 153 / 215 / 112, structured rules 45 / 6, bills 31, charges 894, audits 3 / 96, open queue 91, `packet_gates` 124, 22 tables. `book_label` is present on all 147 rows. Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+Suite with the database env unset: 514 passed (508 + 6 local tests in `tests/test_tariff_catalog.py`).
+
+## B19 — Airflow orchestration (profile `airflow`)
+
+Orchestration only. DAG code lives in `dags/` and calls existing `src/` entry points; no pipeline behaviour changed. Zero model calls. All proof runs targeted the scratch clone `tariff_b19_scratch`, and the primary was not written.
+
+### Entry-point inventory (read from the code)
+
+| Purpose | Entry point as called | Notes |
+|---|---|---|
+| Intake of a book file | `document_intake.save_upload(bytes, filename, upload_dir)` → `identify_document(path)` → `record_intake(path, filename, detection, status, plain)` | content-addressed save; detection reads only identity |
+| Coordinator / routed adapter | `document_intake.route_tariff(path, detection, target=TARIFF_DB_URL)` | dispatches to `ai_book_adapter`, which runs `packet_pipeline.run_book(source, target, client=None)` for AI-route utilities (Appalachian, Pepco), to the hand-written parsers for Dominion, and to the GEN adapter for GEN sheets. Returns created / existing / stayed_draft / queued_for_review / declined |
+| Account audit | `audit_bills.run_audits(conn)` (default pilot selection, as the CLI runs it) | **run_audits has no per-account selection.** It audits the reviewed mapping's pilot bills, or explicit bill ids, where an uncovered bill fails the whole transaction. The DAG does not choose bills: before writing, it checks read-only (`load_mapping` + `_pilot_bill_ids`) that every pilot bill belongs to the requested account, and refuses otherwise |
+| Stage 8 review scan | `parse_review.scan_for_review(conn)` | idempotent; inserts only through `queue_item` |
+| Check counts | plain read-only SQL in `dags/tariff_common.py` | versions, components, rules, structured rules and coverage, queue, audits per company |
+
+Every entry point was callable as-is; nothing in `src/` was changed for Airflow.
+
+### Version pin and the Python 3.9 reason
+
+The image is `apache/airflow:2.11.0-python3.9`, installed against the official `constraints-2.11.0/constraints-3.9.txt`. The project runs Python 3.9 (local venv and the API image). Checked on PyPI and Docker Hub (2026-11-10):
+
+- Airflow 3.1 and later (latest 3.4.0) require Python ≥ 3.10, so the current Airflow 3 line is ruled out. Only the superseded 3.0.x line still allowed 3.9.
+- On the 2.x line, the newest release is 2.11.2, but 2.11.1 and 2.11.2 publish no Python 3.9 image or constraints file (Python 3.9 reached end of life).
+- 2.11.0 is therefore the newest Airflow with an official Python 3.9 build.
+
+Moving the project to Python 3.10+ (backlog B30) would open both Airflow 2.11.2 and Airflow 3.
+
+### Compose shape
+
+- `Dockerfile.airflow` extends the official image and installs the project's `requirements.txt` under the Airflow constraints (in the built image: Python 3.9.22, Airflow 2.11.0, fastapi 0.128.1, psycopg 3.2.13, pdfplumber 0.11.8; `pip check` reports no broken requirements). Code is not copied: `src/`, `docs/` and `dags/` are mounted read-only.
+- New services, all under `profiles: ["airflow"]`:
+  - `airflow-db-create` (postgres:16, one-shot): creates the `airflow` database on the existing server if it is absent;
+  - `airflow-init` (one-shot): `_AIRFLOW_DB_MIGRATE` and `_AIRFLOW_WWW_USER_CREATE` for user `admin`;
+  - `airflow-webserver`: `127.0.0.1:${AIRFLOW_PORT:-8080}`, health `/health`;
+  - `airflow-scheduler`: health `airflow jobs check`.
+- Configuration: LocalExecutor; metadata in database `airflow` (48 tables), never in `tariff`; `LOAD_EXAMPLES=false`; `DAGS_ARE_PAUSED_AT_CREATION=true`.
+- Read-only mounts: `data/raw`, and `data/cache`, so a live reading could not be written even if a client existed. Uploads go to `/tmp/tariff-uploads` in the container.
+- Secrets: `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_FERNET_KEY` and `AIRFLOW_WEBSERVER_SECRET_KEY` were generated into `.env` as individual values and never printed; `.env.example` documents the names.
+- No Anthropic key is passed to these containers and `.env` is not mounted, so `ai_extract.api_key()` returns None and no model client can be built.
+
+**How the runs were aimed at the scratch.** Compose sets `TARIFF_DB_URL` for the Airflow services to `…/${AIRFLOW_TARIFF_DB:-tariff_b19_scratch}`, and `AIRFLOW_TARIFF_DB` is not set in `.env`, so the default applied (the task log prints "tariff database: tariff_b19_scratch"). As a second guard, `tariff_common.target()` refuses a URL whose database equals `TARIFF_PRIMARY_DB_NAME` (`${POSTGRES_DB}`) unless `AIRFLOW_TARIFF_ALLOW_PRIMARY=yes`. A test with the primary named returned `TargetRefused: TARIFF_DB_URL names the primary database (tariff); refusing.`
+
+**Profile off is unchanged.** `docker compose config --services` lists only `postgres` and `api`. `docker compose build` builds only `tariff-audit-engine-api`. `docker compose up -d` starts only those two, and `curl http://127.0.0.1:8000/health` returns `{"status":"ok",…}`, the same steps CI runs (the `compileall src` check passes too).
+
+### DAGs
+
+| DAG | Schedule | Tasks | Retries |
+|---|---|---|---|
+| `tariff_book_ingestion` | manual only (`schedule=None`); param `book_path` (a file in `data/raw`) | `intake` (save, identify, before-counts) → `route_and_run` (`route_tariff`, intake sidecar, after-counts; reports created / existing / held-as-draft / queue items created / declined) | `route_and_run`: 1, after 1 minute |
+| `account_audit` | manual only; param `account_number` | `audit_account` (pilot-ownership check, then `run_audits`; reports statuses, runs and lines written, like-for-like totals per bill) | 1, after 1 minute |
+| `daily_checks` | `@daily`, `catchup=False`, **paused at creation** | `integrity_report` (read-only counts) → `review_scan` (`scan_for_review`; before and after queue counts) | 0 |
+
+### Proofs
+
+- Services: `airflow-db-create` and `airflow-init` exited 0 (`User "admin" created with role "Admin"`, version `2.11.0`); `airflow-webserver` and `airflow-scheduler` healthy; `api` and `postgres` healthy.
+- `airflow dags list`: `account_audit`, `daily_checks`, `tariff_book_ingestion`, all `is_paused True`. `airflow dags list-import-errors`: `No data found`.
+- **Browser sign-in: not done by the assistant.** Reading the generated admin password to type it was refused by the session's permission classifier ("Credential Materialization"). The owner signs in at `http://127.0.0.1:8080` with user `admin` and `AIRFLOW_ADMIN_PASSWORD` from `.env`. Pending.
+- **`tariff_book_ingestion`** (`book_path` `APCo-Tariff-28.pdf`, run `manual__2026-11-10T23:09:26`, success): detection Appalachian Power Company / VA / Tariff No. 28; `model_key_configured: false`; `status ingested`, `versions_created 0`, `versions_existing 44`, `versions_held_as_draft 0`, `queue_items_created 0`, declined LPS / OL / CS / RPSRAC (the known section items); plain outcome "…already stored — all 44 schedule versions matched, nothing new was created." All scratch counts were identical before and after.
+- **`account_audit`** (`account_number` `001172485896`, run `manual__2026-11-10T23:10:13`, success): bills 29 / 30 / 31, mapping `phase5-v3`, like-for-like billed = expected = $95.75 / $101.67 / $114.45, delta $0.00 each.
+  - Statuses were `created ×3` (3 runs and 96 lines written on the scratch), not no-ops. The scratch's stored runs (2026-10-31) carry tariff snapshot `42909d78…`; today's snapshot is `ca6c1e44…`, because the tariff content behind the snapshot has changed since those runs were stored. A different input hash is correctly recorded as a new run.
+  - All three old and new pairs have identical totals. The primary's 3 stored runs predate the change in the same way, so the first audit there will also record new runs.
+- **`daily_checks`**, run once by hand with `airflow dags test` so the DAG stayed paused (unpausing a `@daily` DAG would also let the scheduler queue its latest interval). Both tasks succeeded.
+  - The integrity report matches the scratch's direct counts: versions 44 / 62 / 41, active 44 / 42 / 41, components 573 / 319 / 448, rules 153 / 215 / 112, structured rules 45 / 6 across 17 / 6 versions, audits 6 / 192 after the audit proof.
+  - **Queue count: 91 before, 116 after, not unchanged.** The scan legitimately queued 25 `zero_rate_unexpected` items: 17 Appalachian components (EE-RAC, G-RAC, GS and others) and 8 Pepco components with rate 0. The Stage 8 scan was last run before the Appalachian AI set and Pepco were loaded, so these zero rates had never been queued. The first `daily_checks` run on the primary would queue the same 25 for review.
+- End state: all three DAGs paused (`is_paused True`); the two manual DAGs were unpaused only for their triggered runs, then paused again.
+
+### Tests
+
+`tests/test_airflow_dags.py` (4) loads `dags/` through `DagBag` and asserts no import errors, exactly the three DAG ids, each DAG's schedule, params, task order and retries, and that `daily_checks` is paused at creation without catch-up. Airflow is not installed in the project venv (so the pinned project dependencies stay as they are), so the file skips under the standing command. It was run inside the Airflow image with `docker compose --profile airflow run --rm … python -m pytest tests/test_airflow_dags.py`: 4 passed.
+
+### Data unchanged
+
+Primary: `tariff_versions` pre-existing-column hash `985836662bc73aaf785529d7fc0cccbe` and other-21-tables hash `026d4c8478b7696068912abb5b6a6e25`, equal to the Tariffs-task after-state; every standing count identical (versions 44 / 62 / 41, components 573 / 319 / 448, rules 153 / 215 / 112, structured 45 / 6, bills 31 / 894, audits 3 / 96, open queue 91, `packet_gates` 124, 22 tables). Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+Suite with the database env unset: 514 passed, 1 skipped (the DagBag file, which needs Airflow; run in the image it passes 4 of 4).
+
+## B20 — Analytics marts (star schema in schema `mart`) with exact reconciliation
+
+Zero model calls. The build reads the operational tables with SELECT only and writes only inside `mart`. No pipeline, billing or API behaviour changed. Later analysis layers (B17, B21–B23) read only these marts.
+
+### Source grains (primary, read-only)
+
+Accounts 1; bills 31 (2023-03-17 to 2025-10-13); bill charges 894; audit runs 3 (`phase5-v3`, created 2026-10-31) with 96 lines, run 1 → bill 29, run 2 → bill 30, run 3 → bill 31, 32 lines each. Exact decimal checks before building:
+
+- every bill's charges sum to its `total_billed` exactly (largest difference 0.00, all 31 bills);
+- every audit line's `tariff_component_id` and `bill_charge_id` resolve, and the resolved component's type and rate equal the line's recorded `detail`;
+- each run's report `tariff_version.id` (2) resolves to Virginia Electric and Power Company, schedule 120, v12, 2025-07-01.
+
+**Current-run rule:** for each bill, its audit lines come from the latest audit run that covers it (latest `created_at`, then highest id). On the primary today that selects runs 1, 2 and 3 for bills 29, 30 and 31. On `tariff_b19_scratch`, which holds two runs per pilot bill after the B19 `account_audit` proof, it selects the newer runs 4, 5 and 6: 96 of 192 lines.
+
+### Schema (grain · key · attributes and measures)
+
+- `dim_date`: one row per calendar day from the earliest `bill_from` to the latest `bill_to` (942 days) · `date_key` YYYYMMDD · `calendar_date` (ISO text), `year`, `month`, `year_month`, `rate_seasons`. Seasons are stored per schedule and differ by utility, so there is no single global season. `rate_seasons` lists every stored month-range component season code (`may_oct`, `may_sep`, `nov_apr`, `oct_apr`) covering the date's month. Named seasons that are not month ranges (`summer`, `base`) are not expanded, since doing so would invent month sets.
+- `dim_utility`: one row per (company, state, book label), 4 rows · `utility_key` (ordinal).
+- `dim_account`: one row per account · `account_key` (ordinal) · account number; utility and state from the tariff versions its bills' current runs priced against (NULL when no bill is audited; more than one utility fails the build); and the stored attributes (customer name, service address, meter, class, voltage, phase, turn-on date, current rate).
+- `dim_schedule`: one row per tariff version (147) · `schedule_key` = version id · `utility_key`, schedule code, kind, book label, version, effective dates, status.
+- `dim_component`: one row per rate component (1,340) · `component_key` = component id · `schedule_key`, type, billing category, unit, variant, billing class, season, tier bounds and unit, rate.
+- `fact_bill`: one row per bill (31) · `bill_key` = bill id · `account_key`, `utility_key` and `schedule_key` (the covering version named by the current run; NULL when no run covers the bill), `billed_schedule_code`, `bill_from_key`, `bill_to_key`, billing days, kWh, demand, `billed_total`. Only where a current run covers the bill: `audit_run_id`, `billed_in_scope` and `expected_total` (sums over the run's non-out-of-scope lines), `delta`, and matched / mismatched / out-of-scope line counts. Uncovered bills carry NULL, never zeros.
+- `fact_charge`: one row per billed charge line (894) · `charge_key` = charge id · `bill_key`, `account_key`, `bill_to_key`; `component_key`, `schedule_key`, disposition, determinant type, determinant and rate from the current run's line for that charge (NULL when no line priced it); `amount`.
+- `fact_audit_line`: one row per line of the selected current runs (96) · `audit_line_key` = line id · `audit_run_id`, `bill_key`, `charge_key`, `component_key`, `schedule_key`, label, disposition, verdict, billed, expected, delta.
+- `mart_build_log`: one row per successful build (build id, time, source counts, mart counts, reconciliation JSON, passed). It is kept across rebuilds; every other mart table is dropped and rebuilt.
+
+**Key rule.** A NULL key means the source names no such thing (a bill no loaded version covers, a charge no audit line priced). A key the source names that the dimension lacks fails the build. There are no invented "unknown" members.
+
+**Exactness.** Amounts and rates are `Decimal` throughout:
+- operational floats (`total_billed`, `amount`, kWh, `rate`) are converted once with `Decimal(str(value))` (the B4 rule) and never used in arithmetic;
+- audit amounts are parsed from their stored decimal text;
+- on Postgres the measure columns are `DECIMAL` (the exact `numeric` type, confirmed in `information_schema`). `NUMERIC` is deliberately not written, because the db shim's DDL translation rewrites that keyword to DOUBLE PRECISION;
+- on SQLite (the test fixtures) `mart` is an attached database and measures are stored as decimal text.
+
+### Build and reconciliation (`src/mart_build.py`)
+
+`build(conn)` runs in one transaction: read the sources, compute every row (failing on an unresolvable key before any write), drop and recreate the eight tables, insert, reconcile, append the build log, commit. Any error or failed check rolls back, writing nothing. `reconcile(conn)` also runs standalone (`python -m src.mart_build --reconcile-only`). Its checks:
+
+1. `fact_bill` count equals source bills;
+2. every bill's `billed_total` equals its source total (largest difference reported);
+3. `fact_charge` count equals source charges;
+4. `fact_charge` per-bill sums equal `fact_bill` billed totals;
+5. `fact_audit_line` count equals the selected current runs' lines;
+6. per bill, the lines' in-scope billed and expected sums equal the run's stored like-for-like totals, and `fact_bill`'s billed in scope, expected and delta equal them too;
+7. uncovered bills carry NULL audit measures;
+8. all 16 fact and dimension foreign keys resolve.
+
+### Scratch proof (`tariff_b20_marts_20261110`, a `pg_dump` of the primary)
+
+| Check | Result |
+|---|---|
+| 1 | PASS, 31 = 31 |
+| 2 | PASS, largest difference 0.00 |
+| 3 | PASS, 894 = 894 |
+| 4 | PASS, largest difference 0.00 |
+| 5 | PASS, 96 = 96 (runs 1, 2, 3) |
+| 6 | PASS: bill 29 95.75 / 95.75 Δ 0.00; bill 30 101.67 / 101.67 Δ 0.00; bill 31 114.45 / 114.45 Δ 0.00 |
+| 7 | PASS, 0 violations |
+| 8 | PASS, 0 orphans across 16 keys |
+
+Mart counts: dim_date 942, dim_utility 4, dim_account 1, dim_schedule 147, dim_component 1,340, fact_bill 31, fact_charge 894, fact_audit_line 96. Two consecutive builds produced identical sha256 content hashes for all eight tables (prefixes: dim_account `66f07d4c2e913bc6`, dim_component `69e17f975837f210`, dim_date `85f9f3dc8df97122`, dim_schedule `e319c3c14673f05a`, dim_utility `df775b074cf7d0d0`, fact_audit_line `f47994eee30fcd59`, fact_bill `16a8e609f62fa130`, fact_charge `fb0a89c1dcbb7a51`).
+
+### Analysis sanity checks (scratch marts only)
+
+- **Billed per year-month for account 001172485896** (`fact_bill` ⋈ `dim_account` ⋈ `dim_date` on `bill_to_key`): 31 months, 2023-04 $165.15 through 2025-10 $115.35. Pilot months 2025-08 / 09 / 10 = $96.49 / $102.47 / $115.35, the printed totals including tax.
+- **Pilot billed vs expected by verdict** (`fact_audit_line` ⋈ `fact_bill`): each pilot bill has 31 MATCH lines (billed = expected = $95.75 / $101.67 / $114.45) and 1 OUT-OF-SCOPE line (tax $0.74 / $0.80 / $0.90, expected NULL).
+- **Billed by component billing category per year** (`fact_charge` ⋈ `dim_date` ⟕ `dim_component`):
+  - 2023: $1,251.11, all 252 charges unpriced by an audit line;
+  - 2024: $1,524.65, 339 unpriced;
+  - 2025: $942.45 unpriced (255 charges), $141.63 on base-schedule components with no billing category (12), $170.24 on category "120" (36), total $1,254.32.
+
+  The year totals equal the Phase 4 stored totals ($1,251.11 / $1,524.65 / $1,254.32). A first draft of this query's `COALESCE` merged "no priced component" with "component has no billing category". It was corrected to separate them before the figures above.
+
+### Primary landing
+
+- **Backup:** `data/tariff-pg-pre-marts.2026-11-10.sql`, 522,328 bytes (gitignored). `pg_dump` exited 0 and the file contains `-- PostgreSQL database dump complete`. It was taken before any write.
+- **Build:** `mart` schema created and built on the primary, build_id 1. All eight checks PASS with the same figures as the scratch (current runs 1, 2, 3; pilot 95.75 / 101.67 / 114.45, Δ 0.00; largest differences 0.00; 0 orphans). The mart content hashes equal the scratch's.
+- **Operational content hash** (every row of the 22 `public` tables): `06607de40abac530d38dd2a612867062` before and after, and again after the DAG proof. Schemas went from `public` to `mart, public`. Every standing count is unchanged.
+- The report printer in the landing script failed after the build had committed (a mixed-type `sort_keys` while formatting). The full report was printed from a standalone read-only `reconcile` on the primary.
+
+### Airflow
+
+- **DAG:** `dags/mart_build.py` (`mart_build`): manual only, one task `build_and_reconcile`, no retries, B19's target guard (scratch default, primary refused without `AIRFLOW_TARIFF_ALLOW_PRIMARY=yes`).
+- **Proof run:** `manual__2026-11-10T23:44:57`, success, log "tariff database: tariff_b19_scratch". All eight checks PASS, with current runs 4 / 5 / 6 chosen from 6 runs and 96 of 192 lines selected, pilot totals 95.75 / 101.67 / 114.45, Δ 0.00.
+  - The first trigger, sent the moment the DAG file appeared, produced no run (the scheduler had not yet registered the DAG). The second trigger succeeded.
+- **End state:** all four DAGs paused.
+- **Tests:** the DagBag test file now expects four DAGs and checks `mart_build`'s structure; 5 of 5 pass inside the Airflow image.
+
+### Tests
+
+`tests/test_mart_build.py` (7, local SQLite fixtures) covers:
+- every table populated and all checks passing;
+- the current-run rule choosing the later of two runs for a bill (the stale run's MISMATCH line is excluded);
+- an uncovered bill's NULL audit measures, exact decimal-text storage, and charge sums equal to the bill total;
+- identical hashes across two builds;
+- an unresolvable component key failing the build with prior marts untouched;
+- a failed reconciliation rolling back;
+- the operational tables byte-identical after a build.
+
+Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+Suite with the database env unset: 521 passed, 1 skipped (514 + 7 mart tests; the skip is the DagBag file, which passes 5 of 5 inside the Airflow image).
+
+## B27 — Shared versioned feature pipeline (schema `features`)
+
+Zero model calls. `src/feature_pipeline.py` reads only the `mart` schema and writes only the `features` schema. B17, B18, B21 and B23 read features from here; none of them builds its own.
+
+### Source boundary
+
+The pipeline issues exactly three queries, all over mart tables: `mart.fact_bill` ⋈ `mart.dim_account` ⋈ `mart.dim_date` (bills in account and date order), `mart.fact_audit_line`, and `mart.fact_charge`. A test parses every `FROM` and `JOIN` in the module and asserts that the reads name only `mart.*` and the writes only `features.*`. Every requested v1 feature was computable from the marts, so none was omitted.
+
+### The v1 feature set (registry `features.feature_definitions`, version `v1`)
+
+One row-set per bill, computed as of that bill. The account's bills are ordered by bill end date, then bill key.
+
+| Feature | Type | Definition | NULL rule |
+|---|---|---|---|
+| billed_total | decimal | printed billed total | never |
+| expected_total | decimal | current run's expected in-scope total | no current audit run |
+| delta_amount | decimal | in-scope billed − expected | no current audit run |
+| delta_pct | decimal | delta_amount / expected_total × 100 | no current run; expected 0 |
+| total_kwh | decimal | bill kWh | no stored kWh |
+| days_in_period | integer | billing days | no stored days |
+| kwh_per_day | decimal | total_kwh / days | either NULL, or days 0 |
+| billed_per_kwh | decimal | billed_total / total_kwh | kWh NULL or 0 |
+| bill_year, bill_month | integer | calendar year and month of the bill end date (dim_date) | never |
+| season_codes | text | `dim_date.rate_seasons` at the bill end date | no stored month-range code covers the month |
+| days_since_prev_bill | integer | end date − previous bill's end date | first bill |
+| kwh_per_day_change_pct | decimal | vs previous bill, × 100 | first bill; either NULL; previous 0 |
+| trailing_3_kwh_per_day | decimal | mean over up to 3 strictly earlier bills (NULL kwh_per_day skipped) | first bill |
+| trailing_3_billed_total | decimal | mean over up to 3 strictly earlier bills | first bill |
+| bills_so_far | integer | the account's bills up to and including this one | never |
+| has_audit | integer | 1 if a current audit run covers the bill, else 0 | never |
+| verdict_match_rate | decimal | MATCH / in-scope current audit lines | no current run; no in-scope lines |
+| mismatched_lines | integer | lines neither MATCH nor OUT-OF-SCOPE | no current run |
+| max_abs_line_delta | decimal | largest |line delta| | no current run; no line delta |
+| charges_classified_pct | decimal | share × 100 of the charged amount whose line has a known component (`fact_charge.component_key`) | charged amount sums to 0 |
+
+`feature_values` holds one row per (bill, feature, version): `account_key`, `bill_key`, `feature_name`, `feature_set_version`, `numeric_value` (DECIMAL on Postgres), `text_value`. `feature_build_log` holds one row per build: version, time, bill / feature / row counts, and the checks.
+
+The registry rows are written by the build from `FEATURES`, the same list `compute` uses (an assertion ties each computed row's keys to it). A build check then compares the stored registry with the computed set.
+
+**Exactness.** Values are `Decimal` throughout. Sums and differences are exact; quotients (rates, means, percentages) are quantized to 10 places with ROUND_HALF_UP. The read accessor `frame(conn, account_number, version)` returns a pandas DataFrame with `dtype=object`, so values stay `Decimal`, `int`, text or `None`. A first draft used `DataFrame.from_dict`, which coerces ints and NULLs to float and NaN even with `dtype=object`. The test caught it and the accessor now builds from row lists.
+
+### Point-in-time discipline and versioning
+
+- **Point in time:** a bill's features read only that bill and the account's strictly earlier bills (`history` holds already-computed earlier rows; the loop never looks ahead). The audit features describe the bill's own current audit run under the B20 rule.
+- **Versioning:** the version is the code constant `FEATURE_SET_VERSION = "v1"`. A build replaces only its own version's registry and values in one transaction and never touches another version's rows. A failed check rolls back, writing nothing.
+
+### Proofs
+
+**Tests** (`tests/test_feature_pipeline.py`, 6, fixture marts built by `mart_build` on SQLite):
+
+- **Middle bill by hand.** Bill 3's trailing kWh/day = mean(900/30, 600/30) = 25, trailing billed = (120.00 + 90.30) / 2, change % = (25 − 20) / 20 × 100 = 25, 32 days since the previous bill, and bill 4's trailing billed is the mean of bills 1–3 only. The pipeline agrees.
+- **Leakage tripwire.** Features for bills 1–4 were built; then a later bill 5 (2,400 kWh, $250.00) was appended, and the marts and features rebuilt. Every stored value row for bills 1–4 was byte-identical.
+- **NULL rules.** The first bill has NULL history features; the unaudited bill has NULL audit features with `has_audit` 0. The audited bill has expected 35.20, delta −0.07, match rate 0.5, 1 mismatched line, max |delta| 0.07, and classified % 35.13 / 36.75 × 100.
+- **Versions coexist.** Rebuilding v1 gives identical hashes; building v2 leaves v1's hashes unchanged.
+- **Accessor and registry.** The accessor shape is 4 × 21 in registry order, all object, with no floats; the registry equals the computed set.
+- **Reads only marts.** As described under Source boundary.
+
+### Scratch (`tariff_b27_features_20261110`, a `pg_dump` of the primary with its marts)
+
+- Two builds, both all 5 checks PASS: registry 21 = 21; 651 rows = 31 bills × 21 features; billed_total features sum 4,030.08 = `mart.fact_bill` 4,030.08; 0 unaudited violations; 0 first-bill violations.
+- Identical sha256 across the two builds: `feature_definitions` `8168b857d645b592…`, `feature_values` `195d56a67f20a0e9…`.
+- Accessor for account 001172485896: (31, 21), all object. For example, bill 1 has 165.15, 1268.0 kWh, 34 days, 37.2941176471 kWh/day, seasons `nov_apr,oct_apr`, no history. Bills 29 / 30 / 31 have expected 95.75 / 101.67 / 114.45, delta 0.00, match rate 1.0000000000, 0 mismatched, and classified % 99.2330811483 / 99.2192836928 / 99.2197659298.
+- **Independent SQL spot checks** (written straight against the marts, not the module's code):
+  - `trailing_3_kwh_per_day` (window `AVG … ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING`): bill 5 32.3994766010 vs stored 32.3994766010; bill 20 24.2191570881 vs stored 24.2191570881;
+  - `verdict_match_rate` and `max_abs_line_delta`, bill 29: 1.0000000000 and 0.00 vs stored 1.0000000000 and 0.00;
+  - `charges_classified_pct`, bill 30: 101.67 / 102.47 × 100 = 99.2192836928 vs stored 99.2192836928.
+
+### Primary landing
+
+- **Backup:** `data/tariff-pg-pre-features.2026-11-10.sql`, 777,391 bytes (gitignored). `pg_dump` exited 0 and the file contains `-- PostgreSQL database dump complete`. It was taken before any write.
+- **Build:** build_id 1, all 5 checks PASS, 651 rows; feature hashes equal the scratch's.
+- **Hashes:** `public` (22 tables) `06607de40abac530d38dd2a612867062` and `mart` (9 tables) `4431e52146eb2cadd437df9ef1924157`, identical before and after (and again after the DAG proof). Schemas went from `mart, public` to `features, mart, public`. Standing counts are unchanged.
+
+### Airflow
+
+- **DAG:** `dags/feature_build.py` (`feature_build`): manual only, task `build_features`, no retries, B19's guard.
+- **Proof run:** `manual__2026-11-10T23:58:07`, success, log "tariff database: tariff_b19_scratch". All 5 checks PASS (31 bills, 21 features, 651 rows), with hashes equal to the primary's: that scratch's newer audit runs carry the same verdicts and totals.
+- **End state:** all five DAGs paused.
+- **Tests:** the DagBag tests now cover `feature_build` and pass 6 of 6 inside the Airflow image.
+
+Frozen SQLite SHA-256 unchanged, `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+Suite with the database env unset: 527 passed, 1 skipped (521 + 6 feature tests; the skip is the DagBag file, 6 of 6 inside the Airflow image).
+
+## B17 — DS analysis layer over the marts
+
+Zero model calls. `src/ds_analysis.py` reads only the B20 marts and the B27 feature store and writes no database state; its only output is the report file. It opens a read-only connection.
+
+### Module and guardrails
+
+- **Tables read (`READS`):** `mart.fact_bill`, `mart.dim_date`, `mart.dim_account`, `mart.fact_charge`, `mart.dim_component`, `mart.fact_audit_line`, `mart.mart_build_log`, `features.feature_values`, `features.feature_definitions`, `features.feature_build_log`. A test parses every `FROM` and `JOIN` in the module, asserts that only these tables appear, and finds no write statement.
+- **Shape:** one function per question, each `(conn, account) → (dict of pandas DataFrames, plain-words summary)`. Values are Decimal in object-dtype frames.
+- **Command:** `python -m src.ds_analysis [--account N] [--out PATH]` writes the self-contained HTML report `data/reports/b17-ds-analysis.html`. Charts are inline SVG; no plotting library was installed or added.
+- **Seasons:** the stored `may_sep` / `oct_apr` codes split the year exactly, so a bill is summer or winter by its end month.
+- **Labels:** the audit section describes stored current audit lines and recomputes no verdict. The anomaly scan is labelled "Descriptive statistics — not audit verdicts, not ML".
+- **Coverage:** every classification figure carries its unclassified share.
+
+### Questions and headline figures (primary, account 001172485896)
+
+1. **Trend and seasonality.** 31 bills, 2023-04 to 2025-10. Pooled kWh/day is 35.846 in winter (16 bills) against 26.682 in summer (15 bills). Least-squares trends are given per bill. Yearly billed totals: $1,251.11 / $1,524.65 / $1,254.32.
+2. **What drives the billed total.** 2023 and 2024 are 100% unclassified. 2025 is $311.87 classified (audited bills only) and $942.45 unclassified, 75.14% unclassified. Classified amounts are broken down by billing category and component; the unclassified part is listed by printed bill label, explicitly not a tariff classification.
+3. **Audit outcomes.** Bills 29 / 30 / 31: 31 of 31 in-scope lines MATCH, expected $95.75 / $101.67 / $114.45, total |delta| $0.00, out of scope Virginia Tax Surcharge $0.74 / $0.80 / $0.90. A per-component and per-category table is included.
+4. **The July 2025 rate change.** Bill 28 (2025-06-14 to 2025-07-15) straddles 2025-07-01 and is excluded.
+   - Against the same months a year earlier (bills 17–19), the rate went from $0.13959 to $0.13107 per kWh (−6.10%). The mean bill moved +$5.66: −$6.81 from price and +$12.47 from usage. Price effect = rate change × after-usage; volume effect = before-rate × usage change; they sum exactly to the difference.
+   - Bills 17 and 18 were on Schedule 110, so this comparison mixes the schedule move with the amendment. The report says so.
+   - A comparison against all 27 clean prior bills is shown alongside.
+5. **Descriptive anomaly scan.** z-scores within season (each season's mean and sample standard deviation of per-bill values; these per-bill means differ slightly from the pooled figures in question 1, and the report says so). Top bills: 2 (summer kWh/day z 2.567), 10, 13, 19, 15.
+
+### Independent cross-checks (own SQL against the marts, not the module's queries)
+
+| Question | Report | Independent SQL |
+|---|---|---|
+| Q1 | yearly $1,251.11 / $1,524.65 / $1,254.32; months 2023-04..2025-10 (31); summer and winter 26.682 / 35.846 | same totals; same range and count; same pooled kWh/day |
+| Q2 | 2025: 311.87 / 942.45 / 75.14%; 2023 and 2024 100% | same |
+| Q3 | 31 / 31 MATCH; 95.75 / 101.67 / 114.45; tax 0.74 / 0.80 / 0.90 | same |
+| Q4 | 0.13959 → 0.13107; means 99.11 → 104.77; kWh 710.00 → 799.33; straddler bill 28 | same |
+| Q5 | bill 2 z 2.567 | `stddev_samp` gives 2.567 |
+
+### Report and close-out
+
+- **Report:** `data/reports/b17-ds-analysis.html`, 42,997 bytes. Sections: Trend and seasonality; What drives the billed total; Audit outcomes (descriptive); The July 2025 rate change; Descriptive anomaly scan (not verdicts, not ML). The footer names feature-set v1, feature build 1 and mart build 1.
+- **Tests:** `tests/test_ds_analysis.py` (7, on the B27 fixture marts) covers each question's shape and hand values (2025 total 348.15; 35.13 classified and 89.91% unclassified; bill 4 at 1 of 2 MATCH with "Tax $1.62"; the exact price/volume split; summer-only ranking), the SQL boundary, and the report command end to end.
+- **Suite:** with the database env unset, 534 passed, 1 skipped.
+- **Primary unchanged:** `public` (22) `06607de40abac530d38dd2a612867062` and `mart` (9) `4431e52146eb2cadd437df9ef1924157`, equal to the B27 after-state. Frozen SQLite SHA-256 `85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe`. No commits.
+
+## B21 — Forecasting (schema `forecast`)
+
+Zero model calls. `src/forecasting.py` reads only `mart` and `features` and writes only `forecast`. Forecasts are estimates; every row is labelled "estimate (forecast), not a billing or audit input".
+
+**Methods.**
+- **seasonal_naive** (pure Decimal): the same calendar month from the most recent earlier year with a bill; else that calendar month's mean over all stored years; else the overall mean kWh/day. The rule that fired is stored per target month.
+- **ols** (numpy least squares): kWh/day on a linear month-ordinal trend plus calendar-month indicators. The time axis is the calendar month ordinal, so Jan–Mar 2023 stay missing (no zero-filled months, no synthesized bills).
+- **Float disclosure:** the OLS fit runs in float inside the fit only. Stored values go through `Decimal(str())` and are rounded (kWh to 0.001, money to cents). The baseline is pure Decimal.
+- **Billed forecast:** forecast kWh × held rate, the latest bill's `billed_per_kwh` (bill 31, 0.1304864253). The held rate is stored on every row and in the run.
+
+**Backtest** (walk-forward, one step, last six bills, each fit only on strictly earlier bills):
+
+| bill | month | actual kWh/day | naive | ols | actual $ | naive $ | ols $ |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 26 | 2025-05 | 29.633 | 21.759 | 22.553 | 118.38 | 85.34 | 88.46 |
+| 27 | 2025-06 | 27.467 | 24.133 | 22.312 | 109.11 | 96.41 | 89.13 |
+| 28 | 2025-07 | 23.469 | 24.906 | 22.822 | 98.74 | 105.53 | 96.71 |
+| 29 | 2025-08 | 25.207 | 25.448 | 21.735 | 96.49 | 97.03 | 82.87 |
+| 30 | 2025-09 | 26.100 | 22.933 | 20.214 | 102.47 | 90.81 | 80.05 |
+| 31 | 2025-10 | 28.516 | 24.276 | 24.658 | 115.35 | 98.49 | 100.03 |
+
+MAE kWh/day: naive 3.382, ols 4.350. MAE billed: naive $13.60, ols $17.22. **seasonal_naive ships**, because its billed-total MAE is lower (a tie would also ship the baseline).
+
+**Forecast** (band = ± backtest billed MAE $13.60, a backtest band and not a confidence interval; held rate 0.1304864253):
+
+| month | kWh/day | kWh | billed | band | rule |
+|---|---:|---:|---:|---|---|
+| 2025-11 | 28.344 | 850.313 | $110.95 | 97.35–124.55 | prior_year 2024 |
+| 2025-12 | 38.867 | 1,204.867 | $157.22 | 143.62–170.82 | prior_year 2024 |
+| 2026-01 | 40.848 | 1,266.303 | $165.24 | 151.64–178.84 | prior_year 2025 |
+
+**Determinism:** two scratch builds (`tariff_b21_forecast_20261110`) gave identical hashes: `forecast_runs` 1194d3217622a9a3, `forecast_values` 42f0b65ec622f414.
+
+**Landing:** backup `data/tariff-pg-pre-forecast.2026-11-10.sql`, 805,464 bytes, marker 1. After the landing, features f5257321…, mart 4431e521… and public 06607de4… are identical, and only `forecast` (2 tables) is new.
+
+**DAG:** `forecast_build` (`dags/analytics_builds.py`) succeeded once on `tariff_b19_scratch` with the same hashes, and is left paused. The first automated trigger after the DAG appeared produced no run (the same race seen with mart_build), so the helper now retries the trigger until a run exists.
+
+**Tests:** `tests/test_forecasting.py` (4) covers the baseline lookup rules (prior year, cross-year mean, never-occurred month), the backtest leakage tripwire, the tie rule, and determinism with text-stored money. DagBag: 7 of 7 in the image.
+
+**Suite:** 538 passed, 1 skipped in 143.05s (0:02:23). **Frozen file:** 85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe.
+
+## B22 — Tariff-change impact analysis: STOPPED at its named condition
+
+The predicted problem "the pilots' billed schedules have no superseded version" occurred, and so did its fallback's stop condition. B22's own handling says to stop and not invent a pairing, so no module, report or test was written. Nothing landed, and no database or file other than this doc and the run log changed.
+
+**Evidence (read-only, primary):**
+- Version status by utility: Appalachian 44 active; Pepco 42 active and 20 superseded; Virginia Electric and Power Company 41 active and 0 superseded.
+- No Dominion or Appalachian schedule code has more than one stored version (the query returned no rows).
+- Dominion schedule 120, the pilots' billed schedule and the account's VE-120, has exactly one version: id 2, v12, effective 2025-07-01, active.
+- The only superseded versions on the primary are Pepco's 2025 rate years.
+
+**Anchor witness** (existing `schedule_review.reprice_bill`, read-only): bills 29 / 30 / 31 under schedule 120 version id 2 compute **\$95.75 / \$101.67 / \$114.45**, reproducing the anchors exactly. The module would have been wired to the right path. What is missing is the old version.
+
+**Also blocked:** the Appalachian generality demonstration has no version pair either (all 44 Appalachian versions are single and active).
+
+**To unblock:** load and activate a prior Dominion book (the pre-July-2025 Amendment), so schedule 120 gains a superseded version. Alternatively, the owner could choose to demonstrate the method on a Pepco rate-year pair, which this task's spec did not authorize.
+
+## B23 — Segmentation (schema `segments`)
+
+Zero model calls. `src/segmentation.py` reads only `mart` and `features` and writes only `segments`. The segments are deterministic rules, not clustering, and describe this account's bills only.
+
+**Definitions (v1):**
+
+| dimension | rule | cuts / rule fired |
+|---|---|---|
+| usage_band | terciles of kwh_per_day; cuts at sorted positions ceil(n/3), ceil(2n/3) | 26.1000000000 / 35.9333333333, terciles (n=31) |
+| cost_band | terciles of billed_total, same method | 112.38 / 135.72, terciles (n=31) |
+| season | stored season_codes joined exactly as stored; multi-code labels kept, never reduced | — |
+| audit_state | unaudited / audited_mismatch / audited_match | — |
+| trend | first bill no_previous_bill; change > +20% usage_shift_up, < −20% usage_shift_down, else steady | — |
+| primary | the five labels joined with " / " | — |
+
+Banded dimensions with fewer than 6 bills label every bill `insufficient_history`. NULL labels are `no_value`, `no_season_code`, `no_change_value` and `unaudited`; no bill is ever dropped.
+
+**Counts:**
+- usage_band: low 11, mid 10, high 10;
+- cost_band: low 11, mid 10, high 10;
+- season: may_oct,may_sep 15; nov_apr,oct_apr 13; may_oct,oct_apr 3;
+- audit_state: unaudited 28, audited_match 3;
+- trend: steady 26, usage_shift_up 2, usage_shift_down 2, no_previous_bill 1.
+
+**Consumer answers** (labels from `segments`, amounts joined from `mart.fact_bill`) beside independent SQL over `features` and `mart`:
+- Unaudited high-usage bills: 10, billed $1,666.13 | independent: 10, $1,666.13.
+- Usage shifts beyond 20%: 7 up $129.45, 12 down $135.72, 13 down $102.81, 21 up $152.40 | independent: identical.
+- Billed per season label: may_oct,may_sep $1,657.62 (15); may_oct,oct_apr $339.52 (3); nov_apr,oct_apr $2,032.94 (13) | independent `dim_date.rate_seasons` grouping: identical.
+
+**Determinism:** two scratch builds (`tariff_b23_segments_20261110`) gave identical hashes: definitions 0f4d8ec6fc075375, bill_segments 77dc130add07450b.
+
+**Landing:** backup `data/tariff-pg-pre-segments.2026-11-10.sql`, 809,944 bytes, marker 1. public, mart, features and forecast are identical after; only `segments` (3 tables) is new.
+
+**DAG:** `segment_build` succeeded on `tariff_b19_scratch` with the same counts and cuts, and is left paused.
+
+**Tests:** `tests/test_segmentation.py` (3) covers hand-worked terciles (9 values give cuts 30 and 60, with boundary labels), the small-history rule and every NULL label on the 4-bill fixture, determinism, and the read/write boundary. DagBag: 7 of 7.
+
+**Suite:** 541 passed, 1 skipped in 140.78s (0:02:20). **Frozen file:** 85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe.
+
+## B18 — ML anomaly scores (schema `ml`) — prioritization only, not an audit finding
+
+Zero model calls. `src/anomaly_detection.py` reads only `features` and `mart` and writes only `ml`. Every stored row carries "prioritization only, not an audit finding". With n = 31, the scores order attention and nothing more: they are not probabilities and not findings. Flags were not checked against audit verdicts, because all the pilots matched and agreement would be meaningless.
+
+**Dependency (predicted problem, occurred):** scikit-learn was absent. `scikit-learn==1.5.2` (the version the Airflow 2.11.0 / Python 3.9 constraints pin) was added to `requirements.txt` and installed: numpy 2.0.2, scipy 1.13.1, `pip check` clean. The Airflow image was rebuilt with sklearn 1.5.2 (`pip check` clean) before the DAG proof.
+
+**Coverage screen** (non-null of 31; must reach 80% and vary):
+- **Qualified (15):** billed_total, total_kwh, days_in_period, kwh_per_day, billed_per_kwh, bill_year, bill_month, days_since_prev_bill (30), kwh_per_day_change_pct (30), trailing_3_kwh_per_day (30), trailing_3_billed_total (30), bills_so_far, has_audit, charges_classified_pct, kwh_per_day_gap (derived, 30).
+- **Screened out (6):** expected_total (3, varies), delta_amount, delta_pct, verdict_match_rate, mismatched_lines and max_abs_line_delta (3 each, constant).
+- **Imputation:** account medians, one row each for days_since_prev_bill, kwh_per_day_change_pct, kwh_per_day_gap, trailing_3_billed_total and trailing_3_kwh_per_day (the first bill).
+
+**Model:** IsolationForest(random_state=42, n_estimators=100). K = max(1, round(10% × 31)) = 3. Ranked (rank | bill | score | robust rank): 1|10|0.6094|1, 2|13|0.5532|2, 3|31|0.5500|20, 4|11|0.5477|5, 5|29|0.5388|26, …
+
+**Flagged, prioritization only:**
+- **Bill 10:** billed_total 224.91 (robust z +4.04), total_kwh 1,648 (+2.96), kwh_per_day 49.94 (+2.49).
+- **Bill 13:** kwh_per_day_gap −20.21 (−2.97), kwh_per_day_change_pct −32.47% (−2.28), trailing_3_billed_total 180.27 (+1.69).
+- **Bill 31:** bills_so_far 31 (+1.26), trailing_3_billed_total 99.23 (−0.92), billed_per_kwh 0.1305 (−0.81). Bill 31 ranks mainly on time-position features (bills_so_far, has_audit), which pass the spec's mechanical coverage screen. That is an artifact of including counters, not a usage signal, and the robust ranking puts it 20th.
+
+**Cross-check:** the robust z top 3 is [1, 10, 13] against the IsolationForest's [10, 13, 31], an overlap of 2 of 3 (information, not a gate).
+
+**Determinism:** two scratch runs (`tariff_b18_anomaly_20261110`) gave identical hashes: runs 9eba105c7229c2fa, scores da8e57da06a9253c.
+
+**Landing:** backup `data/tariff-pg-pre-anomaly.2026-11-10.sql`, 819,227 bytes, marker 1. public, mart, features, forecast and segments hashes are identical after; only `ml` is new. That identity is also the guardrail proof that the ML layer touched nothing else. The primary stores 31 scores with 3 flagged.
+
+**DAG:** `anomaly_scoring` succeeded on `tariff_b19_scratch` (same flags and hashes) and is left paused.
+
+**Tests:** `tests/test_anomaly_detection.py` (3) covers determinism and labels, the coverage screen (sparse expected_total and constant bill_year excluded), and the guardrail (writes only `ml`; operational, mart and feature rows unchanged on fixtures). DagBag: 7 of 7.
+
+**Suite:** 544 passed, 1 skipped in 144.08s (0:02:24). **Frozen file:** 85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe.
+
+## B24 — Feedback and monitoring loop (schema `monitor`)
+
+> **Partly superseded (2026-11-11):** outbox delivery of alert findings was removed with the staff console; monitoring now writes findings to the `monitor` tables only. See "Staff console removal".
+
+Zero model calls. `src/monitoring.py` (CLI `python -m src.monitoring`) writes one run's findings to `monitor.monitor_runs` and `monitor.monitor_findings` in one transaction. Thresholds are named constants: `STALE_WARN_DAYS`=35, `STALE_ALERT_DAYS`=70, `REPEAT_MIN`=3, `GROWTH_WARN`=10.
+
+**Checks:** data staleness (newest bill period vs today), mart and feature currency, queue depth by status and by reason (plain words), staff decision tallies, audit coverage, repeat failures (one alert per schedule with 3 or more open items sharing a reason), and queue growth since the previous run (the first run reports ok with "first run").
+
+**Unforeseen conflict (recorded, not improvised around):**
+- The staff outbox's event-type check constraint on existing databases allows only `new_queue_item` and `activation_failed`.
+- Filing `monitor_alert` rows there would need a constraint change to an existing table, which is outside B24's write scope.
+- Handling: `staff_notify`'s single outbox definition now includes `monitor_alert` / `monitor_finding` for newly created outboxes, and `notify_monitor_alert` writes only where the table accepts it. Elsewhere the run records the reason.
+- **Widening the existing outbox constraint is a separate backup-gated step for the owner** (carry-over). On the primary it would not have produced rows yet in any case, because no staff accounts exist.
+
+**Scratch DAG proof** (`daily_checks` via `airflow dags test`, monitoring after the scan, `tariff_b19_scratch`): success. The scan added 0 items (116 open before and after). 29 findings and 10 alerts: data_staleness alert (394 days; the run's date was 2026-11-11 UTC in the container), 9 repeat_failure alerts (that scratch also holds the 25 B19 zero-rate items), mart and features currency ok, audit coverage 3/31, growth "first run". Outbox rows 0: "outbox table predates monitor alerts". `daily_checks` stays paused (`dags test` does not unpause it).
+
+**Primary run:** backup `data/tariff-pg-pre-monitor.2026-11-10.sql`, 829,290 bytes, marker 1. Run 1: 91 open, 26 findings, 7 alerts, outbox rows 0 ("outbox table predates monitor alerts …"; the primary also has 0 staff accounts). Each finding beside its independent SQL:
+- **data_staleness:** alert, 393 days (newest bill_to 2025-10-13) | SQL `current_date − max(bill_to)` = 394. The difference is the date basis: the module uses the local date (2026-11-10) and Postgres `current_date` is UTC (2026-11-11). As the spec predicted, this alert is the monitoring working.
+- **mart_currency** ok 2025-10-13 and **features_currency** ok 31 of 31 | SQL max bill_to 2025-10-13, 31 bills.
+- **queue:** 91 open, by reason: rate_year_missing 48, zero_rate_unexpected 14, rate_not_on_page 8, quote_not_found 6, no_verified_rates 5, unit_not_in_vocabulary 4, model_output_incomplete 2, unreadable_pages 2, missing_rule 1, verify_marker 1 | SQL open 91.
+- **staff_decisions:** 0 / 0 / 0 / 0 | SQL `staff_decisions` 0 rows.
+- **audit_coverage:** 3/31 | SQL 3/31.
+- **repeat_failure** alerts: Pepco MDU-PIV 5, MMA 3, R 11, R-PIV 17, SSL-UG 5 (all rate_year_missing); Dominion RIDER PIPP-CM 13 (zero_rate_unexpected) | SQL `GROUP BY schedule, signal HAVING count(*) >= 3` gives the same six.
+- **queue_growth:** ok, first run.
+
+**Hashes:** public (including the outbox), mart, features, forecast, segments and ml are identical before and after. `monitor` (2 tables) is new.
+
+**Tests:** `tests/test_monitoring.py` (9) covers the staleness thresholds at 35 / 36 / 70 / 71, staleness and currency on a fixture, the repeat rule at 2 (ok) and 3 (alert), an alert filing an outbox row for a seeded Master while a warn does not, no accounts giving zero rows with the reason, and growth "first run" then +11 → warn. DagBag: 7 of 7, with daily_checks running integrity_report → review_scan → monitoring.
+
+**Suite:** 553 passed, 1 skipped in 142.12s (0:02:22). **Frozen file:** 85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe.
+
+## B25 — Extraction evaluation harness and run ledger (schema `eval`)
+
+Zero model calls. Every replay ran with `ANTHROPIC_API_KEY` removed, `ai_extract.api_key` patched to None (it also reads `.env`, which holds a key), and a `NeverCalledClient` that raises on any use. Both replays reported 0 reading and 0 structured calls. `src/extraction_eval.py` replays a book's cache through the current `packet_pipeline.run_book` into a fresh empty-schema scratch (`tariff_b25_<utility>_replay`) and compares it with a comparison database: `tariff_b25_compare`, a `pg_dump` of the primary. The primary itself is never used by the harness.
+
+**Ledger** (`eval.extraction_runs`, landed on the primary):
+
+| run | utility | source | model | calls | cost | sections | comps / rules / structured | source note (abridged) |
+|---|---|---|---|---:|---|---:|---|---|
+| 1 | Appalachian | backfill_historical | claude-fable-5-1 | 9 | NULL (no figure recorded) | 9 | 0 / 0 / – | doc 11B witness, 10th call rejected HTTP 400; cache 9 entries |
+| 2 | Appalachian | backfill_historical | claude-sonnet-5-5 | 46 | NULL (doc gives only "≈$1.64", approximate) | 46 | 573 / 153 / – | doc 11C and 2g/2h; queue 7 by reason; cache 46 entries (45 end_turn, 1 max_tokens) |
+| 3 | Appalachian (structured) | backfill_historical | claude-sonnet-5-5 | 44 | 0.90–1.57 (doc's two estimates) | 44 | – / – / 44 | doc 12h; 3 later SBS re-reads not included |
+| 4 | Pepco | backfill_historical | claude-sonnet-5-5 | 87 | 2.49–3.10 (doc's two estimates) | 44 | 319 / 215 / 6 | doc 12i; 45 reading + 42 structured calls; queue 68 by reason |
+| 5 | Appalachian | cache_replay | cache | 0 | 0 | 48 packets | 573 / 153 / 44 | this harness |
+| 6 | Pepco | cache_replay | cache | 0 | 0 | 64 packets | 319 / 215 / 6 | this harness |
+| 7 | Dominion | cache_replay | — | 0 | NULL | — | — | **skip:** the live set came from the hand-written parsers and the AI re-read is held, so there is no AI cache to replay |
+
+Cache cross-check with `ai_extract`'s own reader: token sums match the doc. Appalachian Sonnet: 168,479 input / 130,396 output tokens; Pepco: 102,709 / 94,276; structured caches: 133,536 / 33,033 and 106,101 / 11,826. One `unreadable_cache` section each in the Appalachian and Pepco reading caches: the max_tokens outputs (OL and SOS), counted and not parsed ad hoc.
+
+**Appalachian agreement** (replay vs stored):
+- versions 44 / 44, components 573 / 573, rules (type and text) 153 / 153 and section queue 7 / 7, all agreeing; structured 44 both, 1 primary-only.
+- **Expected (1):** the SBS `demand_determination` structured row, primary-only, tagged "expected: 12h-fix3 SBS evaluator field-name enforcement (2026-11-10)". The primary's row came from the fix3 re-read on a scratch.
+- **Unexplained (230 = 115 paired groups):** rule citation status. The primary holds 123 Appalachian rules as `uncited` (the Task 4e citation-backfill state), while today's replay stores all 153 as `cited`. Rule identity agrees, and only `citation_status` differs. This is not on the module's known-change list, so it is reported as unexplained, and the primary was not edited.
+- Sections agreeing: 11 of 48, because the citation differences touch most schedules; with citations excluded, all content agrees.
+
+**Pepco agreement:**
+- versions 62, components 319, rules 215 (citations agree) and structured 6, all agreeing.
+- **Unexplained (13 groups, 29 items), all primary-only queue items:** EF no_verified_rates 1, rate_not_on_page 2; MDU-PIV quote_not_found 1, rate_year_missing 5; MMA quote_not_found 1, rate_year_missing 2; PF no_verified_rates 1, quote_not_found 1; R no_verified_rates 1, quote_not_found 2, rate_year_missing 10; RT quote_not_found 1, rate_year_missing 1.
+- These look like the first-pass queue rows recorded in 12i ("R, EF, and PF still have the first-pass queue rows from before a column-split date and a spaced decimal were accepted"). That change is not on the known-change list, so they remain unexplained findings. Today's replay produces 39 queue items, all also on the primary.
+- Sections agreeing: 38 of 44.
+
+**Landing:** backup `data/tariff-pg-pre-eval.2026-11-10.sql`, 833,906 bytes, marker 1. All other schema hashes are identical; only `eval` (1 table) is new.
+
+**DAG:** `extraction_eval` succeeded on `tariff_b19_scratch`: the Pepco replay made 0 calls with the same agreement figures (13 unexplained), the Dominion skip was recorded, and the ledger has 6 rows there. Left paused.
+
+**Tests:** `tests/test_extraction_eval.py` (5) covers the never-called client and the key removal, the ledger range row (0.90 / 1.57) and the unsourced NULL row, `unreadable_cache` counting on a fixture cache, known-change tagging (expected vs unexplained), and the Dominion skip. DagBag: 7 of 7.
+
+**Suite:** 558 passed, 1 skipped in 143.10s (0:02:23). **Frozen file:** 85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe.
+
+## B26 — Tariff Q&A assistant (read-only, lands nothing)
+
+Zero model calls. `src/qa_assistant.py`: `answer(question)` returns `{question_type, answer, citations, refused}`; the CLI is `python -m src.qa_assistant "<question>"`. It works by deterministic pattern routing, entity matching on stored utility names and schedule codes, and template answers built only from the retrieved rows. There is no model, no embeddings and no vector store. A model phrasing layer is a future step that needs the key and a spend approval.
+
+**Question types:**
+- rate lookup (component value, unit and page; active version, or the version covering a named year);
+- rule lookup (stored rules, each with its page, or the plain note "stored without a page citation" for uncited rules such as Dominion's 112);
+- applicability (a structured `rider_applicability` rule if stored; otherwise the rider's stored per-schedule rate rows, the Dominion pattern; otherwise a refusal);
+- schedule inventory (codes grouped by book and kind);
+- schedule owner;
+- version lookup;
+- bill facts (`mart.fact_bill` plus its audit run).
+
+An ambiguous code asks back by listing the candidate utilities. An unrecognized phrasing is refused with the list of supported kinds. Every non-refused answer carries citations.
+
+**Witness set** (read-only, primary): all 6 PASS.
+1. "What is the energy charge for Appalachian RS?" → rate lookup with 6 citations, including "Energy Charge (¢/kWh) All kWh - Total: 0.07622 usd_per_kwh (version 28, effective 2025-01-01, page 28)". The generation and distribution parts and the Load Management lines are also listed, each with its page.
+2. "Which company has a GS-TOD schedule?" → "Schedule GS-TOD is stored for: Appalachian Power Company." (1 citation).
+3. "What is bill 30's expected total and verdict?" → "printed total $102.47; expected total $101.67 (in-scope delta $0.00); verdict: matched (31 lines MATCH)" (citations: `mart.fact_bill` 30, audit run 2).
+4. "What is the basic charge for Pepco Schedule SOS?" → **refusal**: "schedule SOS for Pepco (no stored version)", listing Pepco's 42 stored schedules.
+5. "What versions does Pepco schedule R have?" → 2 versions: 2025-01-01 to 2026-01-01 (superseded) and 2026-01-01 to 2026-12-31 (active) (citations: versions 155 and 156).
+6. "What are the rules for Virginia Electric schedule 120?" → 3 rules, each with the no-citation-stored note.
+
+Entity matching uses stored names only, so "Dominion" is not a matched name. Because schedule 120 belongs to one utility, a question naming "Dominion schedule 120" still resolves to Virginia Electric and Power Company by the stored code: no guess, since there is only one owner. A code held by two utilities with no utility named asks back. Note: GS is stored only for Appalachian; Pepco's codes are GS3A / GSLV / GSND, so exact-code matching keeps them apart.
+
+**Read-only proof:** the hashes of all 10 primary schemas were identical before and after the witness run.
+
+**Tests:** `tests/test_qa_assistant.py` (5) covers each question type on fixtures, citation presence on every non-refused answer, refusals (unknown utility, the SOS pattern, unrecognized phrasing), the ambiguity ask-back (a code at two utilities), and that answering writes nothing.
+
+**Suite:** 563 passed, 1 skipped in 143.83s (0:02:23). **Frozen file:** 85089333d3d560a0b2d2720a42a6046ef973940a22c98e8d8a00174e6deb7cfe.
+
+## B30 — Python 3.12 upgrade: STOPPED at the pre-check
+
+The spec's stop rule fired: no Python 3.12 exists on the machine, and installing an interpreter is not allowed. Nothing changed: the venv was not renamed, and the Dockerfile, CI workflow and `Dockerfile.airflow` are untouched. The project stays on Python 3.9.
+
+**Pre-check output:**
+- `which -a python3.12`: `python3.12 not found`.
+- `/opt/homebrew/bin`: absent (no Homebrew Python). `/usr/local/bin`: no Python. `/Library/Frameworks/Python.framework`: absent. No pyenv.
+- Available: `/usr/bin/python3` = **Python 3.9.6** (system, used by `venv`) and `/opt/anaconda3/bin/python3` = **Python 3.14.6** (Anaconda; `python3` is aliased to it; no conda envs).
+
+**To unblock (owner decision):** put a Python 3.12 interpreter on the machine (for example the python.org installer, Homebrew `python@3.12`, or `conda create -n py312 python=3.12`), then re-run B30 as written. Python 3.14 is not a substitute: the task specifies 3.12, and Airflow 2.11.x publishes no 3.14 image.
+
+## Completion Fix 1 — Appalachian citation backfill (2026-11-11)
+
+`src/citation_backfill.py` (Task 4e pattern, shape of `book_label_backfill.py`): for each uncited Appalachian rule, the cached
+reading for its section (`data/cache/ai-extract/claude-sonnet-5-5/<book hash>.json`) is searched for the same rule type and text;
+a citation is stored only when the cached entry's quote appears on its cited page of `data/raw/APCo-Tariff-28.pdf`
+(`ai_extract.quote_on_page`, whitespace-normalized). Failures stay uncited and are listed (`no_cache`, `no_cached_rule`,
+`no_page_or_quote`, `quote_not_on_page`). Already-cited rows are checked; any disagreement refuses the run. Idempotent. Zero model calls.
+Result: scratch `tariff_fix_citations_20261111` then primary (backup `data/tariff-pg-pre-citation-backfill.2026-11-11.sql`):
+123 stored, 0 listed; Appalachian rules now 153/153 cited; the 30 already-cited rows byte-identical; only `tariff_rules`'
+`source_page`/`citation_status` changed. Tests: `tests/test_citation_backfill.py` (3).
+
+## Completion Fix 2 — Pepco first-pass queue rows (2026-11-11)
+
+> **Note (2026-11-11):** the primary step now runs through `src/operator_actions.py dismiss`, not the console; see "Staff console removal".
+
+The 29 B25 primary-only Pepco items (ids 57–68, 70–73, 79, 80, 109–119; `(source_ref, field, signal)` absent from the replay)
+were dismissed through `staff_actions.dismiss_item` on clone `tariff_fix_pepco_queue_20261111` (accounts by `seed_staff.seed`):
+open queue 91 → 62, 29 decisions with the completion note, no tariff data changed. **Primary step pending:** the decision path
+requires a signed-in staff account and the primary has none; it runs after the owner seeds Master: the same `dismiss_item`
+loop, signed in as Master, with the same note, behind backup `data/tariff-pg-pre-pepco-queue.<run-date>.sql`.
+
+## Completion Fix 3 — Outbox constraint widening (2026-11-11)
+
+> **Superseded (2026-11-11):** the staff console was removed; see "Staff console removal" at the end of this document. This section is kept as history.
+
+One definition (`src/staff_notify.py`, Task 12r pattern): `EVENT_REF_KIND` → `EVENT_TYPES` (new_queue_item, activation_failed,
+monitor_alert) and `REF_KINDS` (queue_item, tariff_version, monitor_finding). The fresh-table CHECKs, `allowed_values`,
+`verify_outbox` (raises on any live check that is not exactly the definition; never alters), `widen_sql` (backup-gated use only)
+and `outbox_allows` are all built from it. `seed_staff.seed` calls `verify_outbox`, so seeding refuses on a narrower table instead
+of running silently. The ref_kind check had to widen with the event check (monitor_alert rows carry ref_kind monitor_finding).
+Primary widened in one transaction behind `data/tariff-pg-pre-outbox-widening.2026-11-11.sql`; content hashes identical.
+The console's outbox view labels the new event "Monitoring alert".
+
+## B22 completion — impact analysis on the Pepco pair (2026-11-11)
+
+`src/impact_analysis.py`: a bill's determinants priced under two versions of its billed schedule BY VERSION ID through
+`schedule_review.price_schedule` (version pin; riders as the repricing includes them), breakdown from `repricing_reasons`.
+Read-only (primary hashes identical across the run). Anchor reproduced as code: bills 29/30/31 under schedule 120 version 2 =
+$95.75 / $101.67 / $114.45. Pair rule: most differing component rates, falling through pairs the constructed residential bill
+cannot price (SSL-UG 14, SSL-OH 10: missing_determinant) → Pepco R #155 (2025-01-01, superseded) vs #156 (2026-01-01, active),
+5 differing rates. Pepco stores no season or tier bounds on any component, so the four seasonal/tiered energy components are
+named and excluded (the path bills them in every month and on all usage). Witness: January 2026, 750 kWh; effect +$1.00/month
+(customer charge 17.09 → 18.09; riders delta 0). No Dominion pair exists. Report `data/reports/b22-impact.html`.
+Carry-over: storing Pepco seasons (billing-month season rule) and tier bounds would make the energy components priceable.
+
+## B30 re-run — Python 3.12 upgrade: DONE (2026-11-11)
+
+Interpreter: `/opt/anaconda3/envs/py312/bin/python` (Python 3.12.13, conda env `py312`, created on the owner's request). The
+3.9 venv was renamed `venv-3.9-backup` (kept; `venv-*/` added to `.gitignore`) and a fresh `venv` built from it.
+- Pin bump: `scikit-learn` 1.5.2 → **1.8.0** (Airflow 2.11.2's constraints-3.12 pin it; 1.5.2 came from the 3.9 constraints).
+  Unpinned packages resolve newer on 3.12 (local venv: pandas 3.1.1, numpy 2.5.4, fastapi 0.162.4, starlette 1.10.0,
+  anthropic 2.8.0, pytest 9.2.0); the Airflow image stays on its constraints (pandas 2.1.4, numpy 1.26.4). `pip check` clean in both.
+- `Dockerfile` → `python:3.12-slim`; CI `python-version` "3.10" → "3.12".
+- `Dockerfile.airflow` → `apache/airflow:2.11.2-python3.12` with `constraints-2.11.2/constraints-3.12.txt` (manifest inspect:
+  2.11.0/2.11.1/2.11.2 have python3.12 builds, 2.11.3–2.11.5 do not); compose image tag `tariff-audit-engine-airflow:2.11.2`.
+  Never Airflow 3.
+- Proof: suite 573 passed, 1 skipped on 3.12; API container Python 3.12.16 healthy (`/health` 200); Airflow 2.11.2 webserver and
+  scheduler healthy; DagBag in the image 9 DAGs, 0 import errors, all paused; in-image DAG tests 7 passed; mart-build smoke on
+  scratch clones (local 3.12 venv and inside the image) gives the 8 mart data tables byte-identical to the primary
+  (`678c8a46…`); `mart_build_log` only gains its run row. Primary hashes unchanged.
+- Rollback (unused): `git checkout -- Dockerfile .github/workflows/ci.yml Dockerfile.airflow`, rename `venv` → `venv-3.12-failed`,
+  rename `venv-3.9-backup` → `venv`, revert the requirements pin and compose tag, re-run the suite.
+
+## Task A — Pepco season and tier bounds (2026-11-11)
+
+`src/pepco_terms.py` derives terms from stored Pepco component type strings (no PDF, no extraction): `summer`/`winter` as named;
+`first_N` → band 0–N kWh; `over_N` → band N kWh and up (no max). Additive columns on `tariff_components`: **`season_term`** TEXT,
+`tier_min_kwh` / `tier_max_kwh` DECIMAL. (Deviation from the spec's column name `season`: the table already has a `season` column,
+used by Dominion with `billing_month_seasons` rules; writing it would change pre-existing column values, so the term has its own
+column.) Two readings → listed, NULL; tier words on a non-per-kWh unit → listed, tier NULL; non-Pepco rows untouched.
+Engine (`billing_engine`): a component with a stored `season_term` prices only in the bill month's season, read from the version's
+own stored season rules (any rule type, e.g. "Summer – Billing months of June through October…"); no resolving rule → refuse, never
+guess. A component with stored `tier_*_kwh` prices only the kWh inside its band. Components without the new terms take exactly the
+old code paths. Coverage of 319 Pepco components: 40 season only, 8 season + tier, 0 tier only, 0 ambiguous, 271 neither (34 names,
+none carrying a season or tier word). All 18 termed versions resolve January and July from stored rules.
+B22 re-run (R #155 → #156, 750 kWh): January +$3.93/month, July +$4.75/month, every line priced, hand = path.
+Landed behind `data/tariff-pg-pre-pepco-terms.2026-11-11.sql`.
+Guard note: the Appalachian RS-TOD ($90.93) and SBS ($744.41) witnesses do not reproduce on today's primary under either the old
+or the new engine (RS-TOD's p. 34 eligibility text — queue item 56 — exists in no stored or cached source; SBS's current
+`standby_contract_demand` rule blocks for a contract amount). Old-engine and new-engine outputs are identical for all six guards
+and every candidate on all 31 bills.
+
+## Task B — Anomaly screen refinement (2026-11-11)
+
+`src/anomaly_detection.py`: `bill_year`, `bill_month`, `bills_so_far`, `has_audit` are removed by rule ("position or coverage, not
+behavior") before the coverage screen; every run records them (`ml_anomaly_runs.features_excluded`, additive column) and stores
+its coverage table (`ml.ml_anomaly_coverage`, new). Runs are now history: each build appends a run_id; run 1 is never rewritten.
+Fewer than six qualifying features stops before writing. Model, K rule and labels unchanged. Primary run 2 (behind
+`data/tariff-pg-pre-anomaly-v2.2026-11-11.sql`): 11 features; top 3 bills 10, 13, 22; robust top 3 1, 10, 13 (overlap 2 of 3);
+bill 31 now rank 4 (unflagged), robust rank 26.
+
+## Task C — Requirements pinned to one tested set (2026-11-11)
+
+`requirements.txt` pins every listed package to the version resolved inside the Airflow 2.11.2-python3.12 image (its
+constraints set): pandas 2.1.4, openpyxl 3.1.5, pyxlsb 1.0.10, pytest 8.2.1, pdfplumber 0.11.10, psycopg[binary] 3.3.8,
+fastapi 0.141.1, uvicorn 0.54.0, python-multipart 0.0.22, httpx 0.28.1, anthropic 2.8.0, scikit-learn 1.8.0. Local venv
+(rebuilt from py312; the drifted one kept as `venv-3.12-drift`), API image and Airflow image now resolve the same version of
+each. Transitive packages are not pinned: the local venv and API image agree with each other, and 28 of them differ from the
+Airflow image's constrained set (e.g. pydantic 2.14.3 vs 2.12.5). Restore point: `data/requirements-prepin.2026-11-11.txt`.
+
+
+## Staff console removal (2026-11-11)
+
+**Decision.** On 2026-11-11 the owner removed the staff console: the separate login-protected staff site with Master and Reviewer roles, per-account scopes, decisions, change history with revert, and outbox notifications (slices 1–4, landed in Task 12p). Addendum 1 approved moving monitoring's non-delivery helpers out of console code. Addendum 2 kept human-in-the-loop correction in an account-free operator form.
+
+**Removed (code).** `src/staff_api.py`, `src/staff_actions.py`, `src/staff_history.py`, `src/staff_notify.py`, `src/staff_accounts.py`, `src/staff_queue.py`, `src/seed_staff.py`, `src/staff_static/` (`staff.css`), and their tests (`test_staff_actions.py` 10, `test_staff_console.py` 5, `test_staff_history.py` 12, `test_staff_notify.py` 17 — 44 tests). The notification call in `parse_review.queue_item()` and the gate-failure notification in `packet_pipeline._finish` were unwound; both files are byte-identical to their committed pre-console form. `.env.example` had no `STAFF_*` entries.
+
+**Removed (primary).** Behind `data/tariff-pg-pre-console-removal.2026-11-11.sql` (marker verified): `staff_accounts`, `staff_account_scopes`, `staff_sessions`, `staff_decisions`, `staff_change_history`, `staff_notification_outbox` (all 0 rows), `utility_scopes` (3 seeded rows: Pepco, Virginia Electric and Power Company, Appalachian Power Company, all `electric`), and the trigger function `staff_change_history_append_only()`. All 38 remaining tables hash identically before and after; standing counts unchanged; open queue 91.
+
+**Stayed.** The parse-review queue, its items (no row changed; the 29 Pepco rows are as they were), its widened status set and `src/review_status.py`; intake, the coordinator and the Stage 8 scan; monitoring (B24) minus delivery. Monitoring now holds the signal wording (`reason_for`) and utility attribution (`utility_index` / `utility_for`, utility names read from `tariff_versions` instead of `utility_scopes` — the same three names). The `staff_decisions` tally check is gone. `monitor.monitor_runs` keeps its `outbox_rows` / `outbox_note` columns as history; new runs write 0 and "no delivery: findings are recorded in the monitor tables only".
+
+**Operator actions (`src/operator_actions.py`).** A local CLI (`list`, `correct ITEM VALUE`, `dismiss ITEM NOTE`): no server, port, login or password. A correction re-enters the same verifier gate the pipeline uses (`ai_extract._verify_component`: quote on the cited page and the rate printed on it, then the version's printed date check); a refusal returns the verifier's reason, stores nothing and logs nothing, and there is no force option. Applied actions append one row to `operator_changes` (item, action, before/after payload, note, actor fixed as `operator`, timestamp), append-only by trigger. It replaces `staff_decisions` and `staff_change_history` for single-person mode. Created on the primary at 0 rows after a scratch rehearsal. Tests: `tests/test_operator_actions.py`, 11 (9 operator, plus the 2 queue status-check tests carried over from `test_staff_actions.py`).
+
+**Conscious trade.** The console's revert command does not carry over. `operator_changes` keeps before-values, so a manual revert remains possible if ever needed.
+
+**Fix 2 consequence.** Fix 2's primary step (dismissing the 29 Pepco rows, queue 91 → 62) no longer needs a Master account: it is runnable through `operator_actions dismiss` once the owner gives the word. It remains a separate, backup-gated step and was not run here.
+
+**Clone proof** (`tariff_remove_console_20261111`, no console code present): the APCo book replayed from cache with a call-refusing client (0 model calls, 0 structured calls) re-queued the 7 Appalachian replay items (49–55, deleted on the clone first) identically in every field; versions/components/rules unchanged. The Stage 8 scan ran (25 `zero_rate_unexpected` items newly queued on the clone — pre-existing data state, scan candidates unchanged by this task). A monitoring run recorded 25 findings in the monitor tables, 0 delivery; versus the previous run only the four `staff_decisions:*` checks are gone.
+
+**Suite.** 585 → 552 passed (2 skipped): −44 console tests, +11 operator tests; `tests/test_monitoring.py` kept its count (two outbox tests replaced by two findings-only tests).

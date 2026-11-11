@@ -80,6 +80,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #
 details summary:focus { text-decoration: underline; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; font-size: 14px; margin-top: 8px; }
 .kv dt { color: var(--dim); } .kv dd { margin: 0; }
+.crumbs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 0; font-size: 14px; color: var(--dim); }
+.crumbs a { cursor: pointer; outline: none; } .crumbs a:focus { text-decoration: underline; } .crumbs .sep { opacity: .6; }
 @media print {
   html, body { background: #fff !important; color: #000 !important; }
   nav.top, .noprint, .hint { display: none !important; }
@@ -211,6 +213,12 @@ window.addEventListener("hashchange", render);
 
 function parentRoute() {
   const p = parts();
+  if (p[0] === "tariffs" && p.length > 2) {
+    // one level up the Tariffs hierarchy: schedule -> book -> company -> landing
+    if (p[1] === "s") return `tariffs/b/${p[2]}/${p[3]}`;
+    if (p[1] === "b") return `tariffs/c/${p[2]}`;
+    return "tariffs";
+  }
   if (p.length > 1) return p[0];
   return p[0] === "home" ? null : "home";
 }
@@ -265,17 +273,90 @@ async function viewHome() {
         `<div class="pills">${verdictCounts(r.lines)}</div>`); }).join("") || `<p class="muted">No audit runs yet.</p>`}</div>`;
 }
 
-/* ---------- 2. Tariffs ---------- */
+/* ---------- 2. Tariffs: company -> book -> grouped schedules -> versions ----------
+   Every title and grouping comes from stored data (utility, book_label, schedule_kind, status, dates). */
+const seg = s => encodeURIComponent(s ?? "");
+const unseg = s => decodeURIComponent(s || "");
+const statusPill = s => pill(s, s === "active" ? "green" : s === "superseded" ? "grey" : "amber");
+const count = (n, one, many) => `${n} ${n === 1 ? one : (many || one + "s")}`;
+const kindLine = k => `${count(k.schedule, "schedule")} · ${count(k.rider, "rider")} · ${k.informational} informational`;
+const spanText = s => s && s.from ? (s.from === s.to ? esc(s.from) : `${esc(s.from)} → ${esc(s.to)}`) : "—";
+const companyRoute = u => `tariffs/c/${seg(u)}`;
+const bookRoute = (u, b, st) => `tariffs/b/${seg(u)}/${seg(b)}` + (st && st !== "all" ? `/${seg(st)}` : "");
+const scheduleRoute = (u, b, code) => `tariffs/s/${seg(u)}/${seg(b)}/${seg(code)}`;
+function crumbs(items) {
+  return `<nav class="crumbs" aria-label="Breadcrumb">${items.map(([label, route], i) =>
+    route && i < items.length - 1 ? `<a data-f data-route="${esc(route)}">${esc(label)}</a>` : `<span>${esc(label)}</span>`
+  ).join(`<span class="sep">›</span>`)}</nav>`;
+}
+const qs = o => "?" + Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+
 async function viewTariffs(p) {
+  if (p[1] === "c") return viewCompany(unseg(p[2]));
+  if (p[1] === "b") return viewBook(unseg(p[2]), unseg(p[3]), unseg(p[4]) || "all");
+  if (p[1] === "s") return viewSchedule(unseg(p[2]), unseg(p[3]), unseg(p[4]));
   if (p[1]) return viewVersion(p[1]);
-  const v = await api("/tariff-versions");
-  return `<h1>Tariffs</h1><p class="hint">Esc returns home.</p><div class="grid">${v.map(x =>
-    card("tariffs/" + x.id, `${esc(x.status)} · v${esc(x.version)}`, esc(x.schedule_code),
-      `${esc(x.effective_from)} → ${esc(x.effective_to || "open")}`, `<div class="pills">${pill(x.status, x.status === "active" ? "green" : "amber")}</div>`)).join("")}</div>`;
+  const companies = await api("/tariff-catalog/companies");
+  return `${crumbs([["Tariffs"]])}<h1>Tariffs</h1>
+  <div class="row"><input id="tariff-search" type="search" placeholder="Search schedules by name, e.g. GS or RIDER T" size="40" autocomplete="off" aria-label="Search schedules across all companies"></div>
+  <div id="search-results"></div>
+  <h2 class="shelf-title">Companies</h2>
+  <div class="grid">${companies.map(c => card(companyRoute(c.utility), `${esc(c.states.join(", "))} · ${c.books.length} ${c.books.length === 1 ? "book" : "books"}`,
+      esc(c.utility), `${c.books.map(b => esc(b.book_label)).join("<br>")}<br>${spanText(c.effective_span)}`,
+      `<div class="pills">${pill(count(c.versions, "version"), "blue")}${pill(count(c.kinds.schedule, "schedule"), "grey")}${pill(count(c.kinds.rider, "rider"), "grey")}${pill(`${c.kinds.informational} informational`, "grey")}</div>`)).join("")}</div>
+  <p class="hint">Esc returns home.</p>`;
+}
+async function runTariffSearch(q) {
+  const box = document.getElementById("search-results"); if (!box) return;
+  if (!q.trim()) { box.innerHTML = ""; return; }
+  const results = await api("/tariff-catalog/search" + qs({ q }));
+  if (document.getElementById("tariff-search")?.value !== q) return;
+  box.innerHTML = `<p class="muted" id="search-count">${results.length} ${results.length === 1 ? "schedule" : "schedules"} match “${esc(q)}”</p>
+    <div class="grid">${results.map(r => card(scheduleRoute(r.utility, r.book_label, r.schedule_code), `${esc(r.utility)} · ${esc(r.book_label)}`,
+      esc(r.schedule_code), `${esc(r.schedule_kind)} · ${r.versions} ${r.versions === 1 ? "version" : "versions"} · latest ${esc(r.latest_effective_from)}`,
+      `<div class="pills">${statusPill(r.current_status)}</div>`)).join("")}</div>`;
+  initFocus(false);
+}
+async function viewCompany(utility) {
+  const c = await api("/tariff-catalog/books" + qs({ utility }));
+  return `${crumbs([["Tariffs", "tariffs"], [c.utility]])}<h1>${esc(c.utility)}</h1>
+  <p class="muted">${esc(c.states.join(", "))} · ${c.books.length} ${c.books.length === 1 ? "book" : "books"}</p>
+  <div class="grid">${c.books.map(b => card(bookRoute(c.utility, b.book_label), `${count(b.versions, "version")} · ${count(b.schedules, "entry", "entries")}`,
+      esc(b.book_label), `${kindLine(b.kinds)}<br>${spanText(b.effective_span)}`,
+      `<div class="pills">${Object.entries(b.statuses).filter(([, n]) => n).map(([s, n]) =>
+        pill(`${n} ${s}`, s === "active" ? "green" : s === "superseded" ? "grey" : "amber")).join("")}</div>`)).join("")}</div>`;
+}
+async function viewBook(utility, label, status) {
+  const b = await api("/tariff-catalog/book" + qs({ utility, book: label, status }));
+  const filters = ["all", "active", "draft", "superseded"].map(s =>
+    `<a class="btn${s === b.status_filter ? " go" : ""}" data-f data-route="${esc(bookRoute(utility, label, s))}" data-filter="${s}">${s[0].toUpperCase() + s.slice(1)}</a>`).join("");
+  const groups = b.groups.map(g => `<div class="panel" data-group="${esc(g.kind)}"><h2>${esc(g.title)} <span class="muted">(${g.entries.length} ${g.entries.length === 1 ? "entry" : "entries"} · ${g.versions} ${g.versions === 1 ? "version" : "versions"})</span></h2>
+    ${g.entries.length ? `<table><thead><tr><th>Schedule</th><th class="num">Versions</th><th>Latest effective</th><th>Current status</th><th>Version statuses</th></tr></thead><tbody>
+    ${g.entries.map(e => `<tr data-f data-route="${esc(scheduleRoute(utility, label, e.schedule_code))}" style="cursor:pointer"><td><b>${esc(e.schedule_code)}</b></td>
+      <td class="num">${e.versions}</td><td>${esc(e.latest_effective_from)}</td><td>${statusPill(e.current_status)}</td>
+      <td class="muted">${Object.entries(e.statuses).filter(([, n]) => n).map(([s, n]) => `${n} ${esc(s)}`).join(" · ")}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="muted">No entries${b.status_filter !== "all" ? ` with a ${esc(b.status_filter)} version` : ""}.</p>`}</div>`).join("");
+  return `${crumbs([["Tariffs", "tariffs"], [b.utility, companyRoute(b.utility)], [b.book_label]])}<h1>${esc(b.book_label)}</h1>
+  <p class="muted">${esc(b.utility)} · ${count(b.versions, "version")} · ${kindLine(b.kinds)} · ${spanText(b.effective_span)}</p>
+  <p class="muted mono">${esc(Array.isArray(b.book_evidence) ? b.book_evidence.join("; ") : b.book_evidence)}</p>
+  <div class="row" role="group" aria-label="Status filter">${filters}</div>
+  <p class="muted" id="entry-count">Showing ${b.entries_shown} of ${b.entries_total} schedule entries${b.status_filter !== "all" ? ` with at least one ${esc(b.status_filter)} version` : ""}.</p>
+  ${groups}`;
+}
+async function viewSchedule(utility, label, code) {
+  const s = await api("/tariff-catalog/schedule" + qs({ utility, book: label, code }));
+  return `${crumbs([["Tariffs", "tariffs"], [s.utility, companyRoute(s.utility)], [s.book_label, bookRoute(s.utility, s.book_label)], [s.schedule_code]])}
+  <h1>${esc(s.schedule_code)}</h1>
+  <p class="muted">${esc(s.utility)} · ${esc(s.book_label)} · ${esc(s.schedule_kind)} · ${s.versions} ${s.versions === 1 ? "version" : "versions"} · current ${statusPill(s.current_status)}</p>
+  <div class="panel"><h2>Versions</h2><table><thead><tr><th>Version</th><th>Effective from</th><th>Effective to</th><th>Status</th><th class="num">Components</th><th class="num">Rules</th></tr></thead><tbody>
+  ${s.rows.map(v => `<tr data-f data-route="tariffs/${v.id}" style="cursor:pointer"><td>#${v.id} · v${esc(v.version)}</td><td>${esc(v.effective_from)}</td>
+    <td>${esc(v.effective_to || "open")}</td><td>${statusPill(v.status)}</td><td class="num">${v.components}</td><td class="num">${v.rules}</td></tr>`).join("")}</tbody></table></div>`;
 }
 async function viewVersion(id) {
   const v = await api("/tariff-versions/" + encodeURIComponent(id));
-  return `<h1>${esc(v.schedule_code)} <span class="muted">v${esc(v.version)}</span></h1>
+  return `${v.book_label ? crumbs([["Tariffs", "tariffs"], [v.utility, companyRoute(v.utility)], [v.book_label, bookRoute(v.utility, v.book_label)],
+      [v.schedule_code, scheduleRoute(v.utility, v.book_label, v.schedule_code)], [`Version #${v.id}`]]) : ""}
+  <h1>${esc(v.schedule_code)} <span class="muted">v${esc(v.version)}</span></h1>
   <p class="muted">${esc(v.utility)} · ${esc(v.state)} · ${esc(v.effective_from)} → ${esc(v.effective_to || "open")} · ${pill(v.status, v.status === "active" ? "green" : "amber")}</p>
   <div class="panel"><h2>Components <span class="muted">(${v.components.length})</span></h2>
   <table><thead><tr><th>Type</th><th>Category</th><th class="num">Rate</th><th>Unit</th><th>Variant / class</th><th>Tier</th><th class="num">Page</th><th>Cell</th></tr></thead><tbody>
@@ -482,6 +563,15 @@ document.addEventListener("click", async ev => {
     return;
   }
   if (t.dataset.route) go(t.dataset.route);
+});
+let searchTimer = null;
+document.addEventListener("input", ev => {
+  if (ev.target.id !== "tariff-search") return;
+  clearTimeout(searchTimer);
+  const q = ev.target.value;
+  searchTimer = setTimeout(() => runTariffSearch(q).catch(e => {
+    const box = document.getElementById("search-results"); if (box) box.innerHTML = alertCard(e, "Search failed");
+  }), 150);
 });
 document.addEventListener("change", ev => {
   if (ev.target.id === "file-bill") { document.getElementById("bill-file").textContent = ev.target.files[0]?.name || ""; doUpload("bill", ev.target.files[0]); }

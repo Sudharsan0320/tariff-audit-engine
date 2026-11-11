@@ -213,8 +213,8 @@ def _components_for_version(conn, version_id):
     )
     components = [_row_dict(cursor, row) for row in cursor.fetchall()]
     for component in components:
-        for column in ("rate", "tier_min", "tier_max"):
-            if component[column] is not None:
+        for column in ("rate", "tier_min", "tier_max", "tier_min_kwh", "tier_max_kwh"):
+            if component.get(column) is not None:
                 component[column] = as_decimal(component[column])
     return components
 

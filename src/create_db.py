@@ -3,8 +3,10 @@ import sqlite3  # import = bring in a toolbox; sqlite3 = Python's built-in toolb
 import os
 try:
     from src import db
+    from src.review_status import STATUS_CHECK
 except ImportError:
     import db
+    from review_status import STATUS_CHECK
 DB_TARGET = db.default_target("data/tariffs.db")  # TARIFF_DB_URL / TARIFF_DB_PATH override the location (pipeline use)
 conn = db.connect(DB_TARGET)  # connect() opens the database; conn = the connection object (your live link). SQLite files are created if missing.
 cur = conn.cursor()  # cursor() makes a cursor; cur = your messenger that carries SQL commands to the database and brings results back
@@ -45,6 +47,10 @@ if "schedule_kind" not in version_columns:
     )
 if "schedule_kind_evidence" not in version_columns:
     cur.execute("ALTER TABLE tariff_versions ADD COLUMN schedule_kind_evidence TEXT")
+# Book identity (printed label + evidence), filled from the source documents by src/book_label_backfill.py.
+for book_column in ("book_label", "book_evidence"):
+    if book_column not in version_columns:
+        cur.execute(f"ALTER TABLE tariff_versions ADD COLUMN {book_column} TEXT")
 
 # --- tariff_components: one row per individual rate, linked to its version ---
 # Column by column:
@@ -280,7 +286,8 @@ CREATE TABLE IF NOT EXISTS schedule_review_decisions (
 # --- parse_review_items: parse results a human must look at (B9) ---
 # Additive: CREATE TABLE IF NOT EXISTS upgrades existing databases in place. A resolution
 # records that a human looked; it never edits the component or rule it points at.
-cur.execute("""
+# The status check comes from src/review_status.py, the single definition every database shares.
+cur.execute(f"""
 CREATE TABLE IF NOT EXISTS parse_review_items (
     id INTEGER PRIMARY KEY,
     source_kind TEXT NOT NULL,
@@ -290,7 +297,7 @@ CREATE TABLE IF NOT EXISTS parse_review_items (
     stored_value TEXT,
     signal TEXT NOT NULL,
     detail TEXT,
-    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+    status TEXT NOT NULL DEFAULT 'open' {STATUS_CHECK},
     reviewer TEXT,
     resolution_note TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

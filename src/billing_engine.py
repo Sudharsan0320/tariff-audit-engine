@@ -301,6 +301,8 @@ def evaluate_component(component, determinants):
     unit = component.get("unit")
     if component.get("tier_min") is not None or component.get("tier_max") is not None:
         raise ValueError("Tiered components must be evaluated as a component group.")
+    if component.get("tier_min_kwh") is not None or component.get("tier_max_kwh") is not None:
+        return rate * _band_kwh(component, determinants)
     if unit == "usd_per_kwh":
         _, quantity = _determinant_for(component, determinants)
         return rate * quantity
@@ -428,6 +430,9 @@ def _select_representations(components):
             component.get("tier_max"),
             component.get("tier_unit"),
             component.get("billing_class"),
+            component.get("season_term"),
+            component.get("tier_min_kwh"),
+            component.get("tier_max_kwh"),
         )
         groups.setdefault(key, []).append(component)
 
@@ -487,6 +492,50 @@ def _season_for_month(conn, version_id, bill_to):
     return season_by_month[month]
 
 
+TERM_SEASON_RULE = re.compile(
+    r"\b(summer|winter)\b\W*(?:is\s+)?(?:the\s+)?billing months (?:of |are )?([A-Za-z]+) through ([A-Za-z]+)",
+    re.IGNORECASE,
+)
+
+
+def _term_season_for_month(conn, version_id, bill_to):
+    """Season of the bill month from the version's own stored season rules (Task A terms; any rule type).
+
+    Read only when a component carries a stored season_term. A month no rule resolves, or two rules disagreeing,
+    raises: the season is never guessed."""
+    rows = conn.execute(
+        "SELECT rule_text FROM tariff_rules WHERE tariff_version_id = ?", (version_id,)
+    ).fetchall()
+    month = _iso_date(bill_to).month
+    season_by_month = {}
+    for (rule_text,) in rows:
+        for season, first_month, last_month in TERM_SEASON_RULE.findall(rule_text or ""):
+            first = datetime.strptime(first_month.capitalize(), "%B").month
+            last = datetime.strptime(last_month.capitalize(), "%B").month
+            months = range(first, last + 1) if first <= last else (*range(first, 13), *range(1, last + 1))
+            for m in months:
+                name = season.casefold()
+                if season_by_month.get(m, name) != name:
+                    raise ValueError(f"Tariff version {version_id} has conflicting seasons for month {m}.")
+                season_by_month[m] = name
+    if month not in season_by_month:
+        raise ValueError(f"No stored season rule resolves bill month {month} for version {version_id}.")
+    return season_by_month[month]
+
+
+def _band_kwh(component, determinants):
+    """kWh inside a component's stored band [tier_min_kwh, tier_max_kwh) of the month's total consumption."""
+    if component.get("unit") != "usd_per_kwh":
+        raise ValueError("A kWh tier band requires a usd_per_kwh component.")
+    if determinants.get("total_consumption") is None:
+        raise ValueError("Component requires missing determinant 'total_consumption'.")
+    total = as_decimal(determinants["total_consumption"])
+    lower = as_decimal(component.get("tier_min_kwh") or 0)
+    upper = component.get("tier_max_kwh")
+    top = total if upper is None else min(total, as_decimal(upper))
+    return max(Decimal(0), top - lower)
+
+
 def evaluate_schedule_components(
     conn, components, determinants, bill_to, billing_class=None, version_id=None
 ):
@@ -509,6 +558,17 @@ def evaluate_schedule_components(
             for component in selected
             if component.get("season") is None
             or component.get("season") == active_season
+        ]
+    termed = [component for component in selected if component.get("season_term") is not None]
+    if termed:
+        if version_id is None:
+            raise ValueError("A tariff version is required to resolve seasonal terms.")
+        term_season = _term_season_for_month(conn, version_id, bill_to)
+        selected = [
+            component
+            for component in selected
+            if component.get("season_term") is None
+            or component.get("season_term") == term_season
         ]
     selected = _select_representations(selected)
     selected.sort(

@@ -29,6 +29,7 @@ try:
         render_report,
     )
     from src import document_intake
+    from src import tariff_catalog
     from src.ingest_usage_history import ingest_usage_pdf
     from src.line_validation import BillNotFound, ValidationRefused, validate_bill_lines
     from src.anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
@@ -62,6 +63,7 @@ except ImportError:
         render_report,
     )
     import document_intake
+    import tariff_catalog
     from ingest_usage_history import ingest_usage_pdf
     from line_validation import BillNotFound, ValidationRefused, validate_bill_lines
     from anomaly import AccountNotFound as AnomalyAccountNotFound, AnomalyError, account_anomalies
@@ -175,6 +177,44 @@ def get_version(version_id: int):
             (version_id,),
         ),
     }
+
+
+def _catalog(call, *args):
+    conn = db.connect(target(), readonly=True)
+    try:
+        return call(conn, *args)
+    except tariff_catalog.CatalogNotFound as error:
+        refuse(404, str(error))
+    except ValueError as error:
+        refuse(422, str(error))
+    finally:
+        conn.close()
+
+
+@app.get("/tariff-catalog/companies")
+def catalog_companies():
+    """Company cards: books, effective span, and version counts by kind, all from stored rows."""
+    return _catalog(tariff_catalog.companies)
+
+
+@app.get("/tariff-catalog/books")
+def catalog_books(utility: str):
+    return _catalog(tariff_catalog.books, utility)
+
+
+@app.get("/tariff-catalog/book")
+def catalog_book(utility: str, book: str, status: Optional[str] = None):
+    return _catalog(tariff_catalog.book, utility, book, status)
+
+
+@app.get("/tariff-catalog/schedule")
+def catalog_schedule(utility: str, book: str, code: str):
+    return _catalog(tariff_catalog.schedule, utility, book, code)
+
+
+@app.get("/tariff-catalog/search")
+def catalog_search(q: str = ""):
+    return _catalog(tariff_catalog.search, q)
 
 
 @app.get("/accounts")
